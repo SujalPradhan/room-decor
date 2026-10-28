@@ -30,3 +30,9 @@ The editing update passes 34 unit tests and the production TypeScript/Vite build
 All 16 existing browser workflows also pass: 14 in the broader run and two targeted reruns after fixing test synchronization. The older walking check now waits for actual camera movement instead of a fixed 300 ms delay; the layout-limit drag check waits for the plan camera's first frame before reading hit coordinates. Together, 21 browser workflows passed against the production build using software WebGL.
 
 Imported GLB storage remains intact when a component is deleted, so undo can restore the complete model. Undo history remains session-local; saved project changes persist across reloads.
+
+## Stable default-branch checkpoint
+
+The realistic editor and editing fixes were merged into `main` through PR #7. GitHub CI run [40735052166](https://github.com/SujalPradhan/room-decor/actions/runs/40735052166) passed the production build, 34 unique unit tests and all 21 browser workflows across three isolated jobs before merge. Cloud functional tests use production assets, a full CSS viewport with half device scale for bounded software raster work, and longer timing budgets; assertions remain intact. Full-resolution native M4 visual/hardware checks above are separate observations.
+
+The application code and assets remain identical to the `roomshift-stable-2026-10-28` tag at `e422ba5`; the follow-up changes are validation infrastructure and proposed-feature documentation. Product-link generation and Cost & time remain planned work.

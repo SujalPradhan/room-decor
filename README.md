@@ -1,6 +1,6 @@
 # Roomshift — Laptop Studio
 
-A local room editor focused on realistic furniture replacement. Phone photos provide appearance/capture input; the laptop provides the main editing workspace. This iteration is developed on `realism-laptop`, preserving the first release on `main`.
+A local room editor focused on realistic furniture replacement. Phone photos provide appearance/capture input; the laptop provides the main editing workspace. The current editor is maintained on `main`. The stable version before product-link work is preserved as `roomshift-stable-2026-10-28`.
 
 Public studio: https://roomshift-studio.dearmacaw4.chatgpt.site
 
@@ -64,3 +64,9 @@ ROOMSHIFT_BASE_URL=http://127.0.0.1:5174 npm run test:e2e
 The Blender rebuild validates 14 roots, portable maps, UVs, normalized bounds and floor pivots. The local editable source is retained under ignored `artifacts/furniture-realistic.blend`; the build script recreates it. [Laptop validation](docs/LAPTOP_VALIDATION.md), [first-release and POCO validation](docs/VALIDATION.md).
 
 The interface follows the visual direction of [Dream Room](https://github.com/Jivraj-18/dream-room-blender); application code and furniture are independently authored. Runtime dependencies include React, Three.js and Lucide under their respective open-source licenses. Generic Poly Haven maps are CC0; authored materials are recorded with the assets.
+
+## Stable checkpoint and proposed next work
+
+[PR #7](https://github.com/SujalPradhan/room-decor/pull/7) merged the current realistic editor into `main`. The annotated tag [`roomshift-stable-2026-10-28`](https://github.com/SujalPradhan/room-decor/tree/roomshift-stable-2026-10-28) preserves the application deployed as public version 3 (source commit `e422ba5`). Retain the tag when implementing later features.
+
+The proposed next release adds product-link intake, reviewed product dimensions, detailed model generation, and a Cost & time tab. Implementation awaits plan review. [Full proposal](docs/PRODUCT_LINK_PLAN.md), [tracking issue #8](https://github.com/SujalPradhan/room-decor/issues/8).
