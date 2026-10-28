@@ -12,7 +12,7 @@ const port = new URL(baseURL).port || "5173";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
-  timeout: process.env.CI ? 120_000 : 45_000,
+  timeout: process.env.CI ? 180_000 : 45_000,
   maxFailures: process.env.CI ? 1 : undefined,
   expect: { timeout: process.env.CI ? 30_000 : 10_000 },
   fullyParallel: !!process.env.CI,
@@ -21,6 +21,9 @@ export default defineConfig({
   use: {
     baseURL,
     viewport: { width: 1512, height: 982 },
+    // Keep the CSS layout while bounding SwiftShader raster work on cloud CPUs.
+    // Full-resolution native-M4 visual checks are recorded separately.
+    deviceScaleFactor: process.env.CI ? 0.5 : 1,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
     launchOptions: {
