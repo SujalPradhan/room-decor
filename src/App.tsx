@@ -60,6 +60,9 @@ import {
   validateLayout,
 } from "./domain";
 import { createRoomScene } from "./scene";
+import ReplacementPanel from "./ReplacementPanel";
+import { createReplacementDraft, previewReplacement } from "./replacement";
+import { getLocalModel } from "./local-assets";
 
 const STORAGE_KEY = "roomshift-project-v1";
 const kindIcons: Record<ItemKind, LucideIcon> = {
@@ -199,6 +202,10 @@ function MiniPlan({ layout, project }: { layout: Layout; project: Project }) {
 }
 
 export default function App() {
+  const [replacementDraft, setReplacementDraft] =
+      useState<FurnitureItem | null>(null),
+    [showReplacement, setShowReplacement] = useState(true),
+    [missingModel, setMissingModel] = useState(false);
   const [project, setProject] = useState<Project>(initialProject),
     [selectedId, setSelectedId] = useState<string | null>(null),
     [mode, setMode] = useState<ViewMode>("orbit");
@@ -323,11 +330,13 @@ export default function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.matches("input,textarea,select")) return;
+      if (replacementDraft && e.key !== "Escape") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.shiftKey ? redo() : undo();
       }
       if (e.key === "Escape") {
+        setReplacementDraft(null);
         setModal(null);
         setSelectedId(null);
         setMobilePanel(null);
@@ -338,7 +347,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, redo, selected, editItem]);
+  }, [undo, redo, selected, editItem, replacementDraft]);
   useEffect(
     () => () => {
       referencesRef.current.forEach((r) => URL.revokeObjectURL(r.url));
@@ -349,15 +358,30 @@ export default function App() {
   const sceneState = useMemo<SceneState>(
     () => ({
       room: project.room,
-      layout,
+      layout:
+        replacementDraft && showReplacement
+          ? previewReplacement(layout, replacementDraft)
+          : layout,
+      ghostItem: replacementDraft && showReplacement ? selected : null,
       selectedId,
       mode,
       wallsVisible,
       showClearances,
     }),
-    [project.room, layout, selectedId, mode, wallsVisible, showClearances],
+    [
+      project.room,
+      layout,
+      selectedId,
+      mode,
+      wallsVisible,
+      showClearances,
+      replacementDraft,
+      showReplacement,
+      selected,
+    ],
   );
   const select = (id: string | null) => {
+    if (replacementDraft) return;
     setSelectedId(id);
     if (id) {
       setTab("object");
@@ -366,7 +390,7 @@ export default function App() {
   };
   const onMove = (id: string, position: Position) => {
     const item = layout.items.find((i) => i.id === id);
-    if (!item || item.locked) return false;
+    if (!item || item.locked || replacementDraft) return false;
     return editItem(id, {
       position: {
         x: Math.round(position.x * 100) / 100,
@@ -413,7 +437,10 @@ export default function App() {
       const next = parseProject(await file.text());
       commit((p) => Object.assign(p, next));
       setSelectedId(null);
-      notify("Project opened successfully.");
+      setReplacementDraft(null);
+      notify(
+        "Project opened successfully. Imported GLB files are stored separately in this browser.",
+      );
     } catch (e) {
       notify(
         e instanceof Error
@@ -462,11 +489,26 @@ export default function App() {
       dimensionSource: "estimated",
     });
   };
+  useEffect(() => {
+    let active = true;
+    setMissingModel(false);
+    if (selected?.assetId?.startsWith("local:"))
+      getLocalModel(selected.assetId)
+        .then((blob) => {
+          if (active) setMissingModel(!blob);
+        })
+        .catch(() => {
+          if (active) setMissingModel(true);
+        });
+    return () => {
+      active = false;
+    };
+  }, [selected?.assetId]);
   const selectedIssues = selected
     ? issues.filter((i) => i.itemIds.includes(selected.id))
     : [];
   return (
-    <div className="app-shell">
+    <div className="app-shell laptop-studio">
       <header className="topbar">
         <a className="brand" href="/" aria-label="Roomshift home">
           <Box size={26} strokeWidth={1.3} />
@@ -633,7 +675,11 @@ export default function App() {
             </button>
           </div>
         </aside>
-        <section className="stage" data-mode={mode} aria-label="Room design workspace">
+        <section
+          className="stage"
+          data-mode={mode}
+          aria-label="Room design workspace"
+        >
           <RoomCanvas
             state={sceneState}
             onSelect={select}
@@ -651,14 +697,14 @@ export default function App() {
               <br />
               <em>A whole new room.</em>
             </h1>
-            <p>Your things. A different perspective.</p>
+            <p>Select a piece. Try something new in its place.</p>
           </div>
           <div className="viewport-tools">
             <div className="history-tools">
               <button
                 className="icon-button"
                 aria-label="Undo"
-                disabled={!past.length}
+                disabled={!past.length || !!replacementDraft}
                 onClick={undo}
               >
                 <Undo2 size={16} />
@@ -666,7 +712,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Redo"
-                disabled={!future.length}
+                disabled={!future.length || !!replacementDraft}
                 onClick={redo}
               >
                 <Redo2 size={16} />
@@ -779,381 +825,464 @@ export default function App() {
         <aside
           className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""}`}
         >
-          <div className="property-tabs">
-            <button
-              className={tab === "object" ? "active" : ""}
-              onClick={() => setTab("object")}
-            >
-              <Move size={14} />
-              Object
-            </button>
-            <button
-              className={tab === "finishes" ? "active" : ""}
-              onClick={() => {
-                setTab("finishes");
-                setMobilePanel("properties");
+          {replacementDraft && selected ? (
+            <ReplacementPanel
+              original={selected}
+              candidate={replacementDraft}
+              layout={layout}
+              room={project.room}
+              showAfter={showReplacement}
+              onCompare={setShowReplacement}
+              onChange={setReplacementDraft}
+              onCancel={() => setReplacementDraft(null)}
+              onFocus={() => controller.current?.focusItem?.(selected.id)}
+              onConfirm={() => {
+                const accepted = editLayout((l) => {
+                  const index = l.items.findIndex(
+                    (i) => i.id === replacementDraft.id,
+                  );
+                  if (index >= 0) l.items[index] = clone(replacementDraft);
+                });
+                if (accepted) {
+                  setReplacementDraft(null);
+                  notify(
+                    "Replacement saved. Undo brings your previous piece back.",
+                  );
+                }
+                return accepted;
               }}
-            >
-              <Palette size={14} />
-              Finishes
-            </button>
-            <button
-              className="mobile-close icon-button"
-              aria-label="Close properties"
-              onClick={() => setMobilePanel(null)}
-            >
-              <X size={16} />
-            </button>
-          </div>
-          {tab === "object" && selected ? (
+            />
+          ) : (
             <>
-              <div className="selected-object">
-                <span className="eyebrow">
-                  {selected.dimensionSource === "product"
-                    ? "NEW POSSIBILITY"
-                    : "YOUR FURNITURE"}
-                </span>
-                <div className="selected-title">
-                  <h2>{selected.name}</h2>
-                  <button
-                    className="icon-button"
-                    aria-label={
-                      selected.locked ? "Unlock object" : "Lock object"
-                    }
-                    onClick={() =>
-                      editItem(selected.id, { locked: !selected.locked })
-                    }
-                  >
-                    {selected.locked ? (
-                      <Lock size={15} />
-                    ) : (
-                      <Unlock size={15} />
-                    )}
-                  </button>
-                </div>
-                <div className="object-preview">
-                  <span className={`preview-platform preview-${selected.kind}`}>
-                    {(() => {
-                      const Icon = kindIcons[selected.kind];
-                      return <Icon size={65} strokeWidth={0.85} />;
-                    })()}
-                  </span>
-                  <span className="object-preview-label">
-                    {kindNames[selected.kind]}
-                  </span>
-                </div>
-              </div>
-              <div className="property-section">
-                <div className="section-label">
-                  DIMENSIONS
-                  <button
-                    onClick={() =>
-                      commit((p) => {
-                        p.unit = p.unit === "cm" ? "in" : "cm";
-                      })
-                    }
-                  >
-                    {project.unit}
-                    <ChevronDown size={10} />
-                  </button>
-                </div>
-                <div className="dimension-grid">
-                  {(["width", "depth", "height"] as const).map((axis) => (
-                    <label key={axis}>
-                      <span>{axis}</span>
-                      <div>
-                        <input
-                          aria-label={`Object ${axis}`}
-                          type="number"
-                          min="1"
-                          max="2000"
-                          step="1"
-                          value={convert(selected.dimensions[axis])}
-                          disabled={
-                            selected.locked ||
-                            selected.dimensionSource === "product"
-                          }
-                          onChange={(e) =>
-                            changeDimension(axis, e.target.value)
-                          }
-                        />
-                        <small>{project.unit}</small>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-                <label className="measurement-check">
-                  <input
-                    type="checkbox"
-                    checked={selected.dimensionSource !== "estimated"}
-                    disabled={selected.dimensionSource === "product"}
-                    onChange={(e) =>
-                      editItem(selected.id, {
-                        dimensionSource: e.target.checked
-                          ? "measured"
-                          : "estimated",
-                      })
-                    }
-                  />
-                  <span>I’ve checked these measurements</span>
-                </label>
-              </div>
-              <div className="property-section">
-                <div className="section-label">
-                  ROTATION
-                  <span>
-                    {Math.round(
-                      ((((selected.rotation * 180) / Math.PI) % 360) + 360) %
-                        360,
-                    )}
-                    °
-                  </span>
-                </div>
-                <div className="rotate-controls">
-                  <button
-                    disabled={selected.locked}
-                    aria-label="Rotate left"
-                    onClick={() =>
-                      editItem(selected.id, {
-                        rotation: selected.rotation - Math.PI / 2,
-                      })
-                    }
-                  >
-                    <RotateCcw size={14} />
-                    90° left
-                  </button>
-                  <button
-                    disabled={selected.locked}
-                    aria-label="Rotate right"
-                    onClick={() =>
-                      editItem(selected.id, {
-                        rotation: selected.rotation + Math.PI / 2,
-                      })
-                    }
-                  >
-                    90° right
-                    <RotateCw size={14} />
-                  </button>
-                </div>
-              </div>
-              <div className="property-section">
-                <div className="section-label">MATERIAL COLOR</div>
-                <div className="swatches">
-                  {furnitureColors.map((c) => (
-                    <button
-                      key={c}
-                      className={selected.color === c ? "chosen" : ""}
-                      style={{ background: c }}
-                      aria-label={`Object color ${c}`}
-                      onClick={() => editItem(selected.id, { color: c })}
-                    >
-                      {selected.color === c && <Check size={12} />}
-                    </button>
-                  ))}
-                  <label className="custom-color" title="Custom object color">
-                    <Plus size={13} />
-                    <input
-                      aria-label="Custom object color"
-                      type="color"
-                      value={selected.color}
-                      onChange={(e) =>
-                        editItem(selected.id, { color: e.target.value })
-                      }
-                    />
-                  </label>
-                </div>
-              </div>
-              <div
-                className={`fit-note ${selectedIssues.length ? "has-issues" : ""}`}
-              >
-                <span>
-                  {selectedIssues.length ? (
-                    <Ruler size={15} />
-                  ) : (
-                    <Check size={15} />
-                  )}
-                </span>
-                <div>
-                  <strong>
-                    {selectedIssues.length
-                      ? "A little adjustment needed"
-                      : selected.dimensionSource === "estimated"
-                        ? "Looks good in this draft"
-                        : "No placement conflicts"}
-                  </strong>
-                  <p>
-                    {selectedIssues.length
-                      ? selectedIssues[0].message
-                      : selected.dimensionSource === "estimated"
-                        ? "Confirm dimensions before deciding on a tight fit."
-                        : "Based on the dimensions entered."}
-                  </p>
-                </div>
-              </div>
-              <div className="object-actions">
+              <div className="property-tabs">
                 <button
-                  onClick={() => {
-                    const item = {
-                      ...clone(selected),
-                      id: crypto.randomUUID(),
-                      name: selected.name + " copy",
-                      position: {
-                        x: selected.position.x + 0.3,
-                        z: selected.position.z + 0.3,
-                      },
-                      locked: false,
-                    };
-                    if (editLayout((l) => l.items.push(item)))
-                      setSelectedId(item.id);
-                  }}
+                  className={tab === "object" ? "active" : ""}
+                  onClick={() => setTab("object")}
                 >
-                  <Copy size={13} />
-                  Duplicate
+                  <Move size={14} />
+                  Object
                 </button>
                 <button
-                  onClick={() =>
-                    editItem(selected.id, { visible: !selected.visible })
-                  }
+                  className={tab === "finishes" ? "active" : ""}
+                  onClick={() => {
+                    setTab("finishes");
+                    setMobilePanel("properties");
+                  }}
                 >
-                  {selected.visible ? <EyeOff size={13} /> : <Eye size={13} />}{" "}
-                  {selected.visible ? "Put aside" : "Bring back"}
+                  <Palette size={14} />
+                  Finishes
+                </button>
+                <button
+                  className="mobile-close icon-button"
+                  aria-label="Close properties"
+                  onClick={() => setMobilePanel(null)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              {tab === "object" && selected ? (
+                <>
+                  <div className="selected-object">
+                    <span className="eyebrow">
+                      {selected.dimensionSource === "product"
+                        ? "NEW POSSIBILITY"
+                        : "YOUR FURNITURE"}
+                    </span>
+                    <div className="selected-title">
+                      <h2>{selected.name}</h2>
+                      <button
+                        className="icon-button"
+                        aria-label={
+                          selected.locked ? "Unlock object" : "Lock object"
+                        }
+                        onClick={() =>
+                          editItem(selected.id, { locked: !selected.locked })
+                        }
+                      >
+                        {selected.locked ? (
+                          <Lock size={15} />
+                        ) : (
+                          <Unlock size={15} />
+                        )}
+                      </button>
+                    </div>
+                    <div className="object-preview">
+                      <img
+                        className="object-render-preview"
+                        src={`/assets/thumbnails/${selected.assetId?.startsWith("builtin:") ? selected.assetId.slice(8) : selected.kind}.png`}
+                        alt={selected.name}
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                      <span
+                        className={`preview-platform preview-${selected.kind}`}
+                      >
+                        {(() => {
+                          const Icon = kindIcons[selected.kind];
+                          return <Icon size={65} strokeWidth={0.85} />;
+                        })()}
+                      </span>
+                      <span className="object-preview-label">
+                        {kindNames[selected.kind]}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="primary-object-actions">
+                    <button
+                      className="button gold"
+                      aria-label="Replace this piece"
+                      disabled={selected.locked}
+                      onClick={() => {
+                        setReplacementDraft(
+                          createReplacementDraft(selected, selected),
+                        );
+                        setShowReplacement(true);
+                        setMode("orbit");
+                      }}
+                    >
+                      Try a replacement <ArrowUpRight size={14} />
+                    </button>
+                    <button
+                      className="focus-piece"
+                      onClick={() =>
+                        controller.current?.focusItem?.(selected.id)
+                      }
+                    >
+                      Focus on this piece <Maximize2 size={12} />
+                    </button>
+                    {missingModel && (
+                      <p className="missing-model-note">
+                        This model is not stored in this browser. Replace it
+                        with the original GLB to restore its appearance.
+                      </p>
+                    )}
+                  </div>
+                  <div className="property-section">
+                    <div className="section-label">
+                      DIMENSIONS
+                      <button
+                        onClick={() =>
+                          commit((p) => {
+                            p.unit = p.unit === "cm" ? "in" : "cm";
+                          })
+                        }
+                      >
+                        {project.unit}
+                        <ChevronDown size={10} />
+                      </button>
+                    </div>
+                    <div className="dimension-grid">
+                      {(["width", "depth", "height"] as const).map((axis) => (
+                        <label key={axis}>
+                          <span>{axis}</span>
+                          <div>
+                            <input
+                              aria-label={`Object ${axis}`}
+                              type="number"
+                              min="1"
+                              max="2000"
+                              step="1"
+                              value={convert(selected.dimensions[axis])}
+                              disabled={
+                                selected.locked ||
+                                selected.dimensionSource === "product"
+                              }
+                              onChange={(e) =>
+                                changeDimension(axis, e.target.value)
+                              }
+                            />
+                            <small>{project.unit}</small>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <label className="measurement-check">
+                      <input
+                        type="checkbox"
+                        checked={selected.dimensionSource !== "estimated"}
+                        disabled={selected.dimensionSource === "product"}
+                        onChange={(e) =>
+                          editItem(selected.id, {
+                            dimensionSource: e.target.checked
+                              ? "measured"
+                              : "estimated",
+                          })
+                        }
+                      />
+                      <span>I’ve checked these measurements</span>
+                    </label>
+                  </div>
+                  <div className="property-section">
+                    <div className="section-label">
+                      ROTATION
+                      <span>
+                        {Math.round(
+                          ((((selected.rotation * 180) / Math.PI) % 360) +
+                            360) %
+                            360,
+                        )}
+                        °
+                      </span>
+                    </div>
+                    <div className="rotate-controls">
+                      <button
+                        disabled={selected.locked}
+                        aria-label="Rotate left"
+                        onClick={() =>
+                          editItem(selected.id, {
+                            rotation: selected.rotation - Math.PI / 2,
+                          })
+                        }
+                      >
+                        <RotateCcw size={14} />
+                        90° left
+                      </button>
+                      <button
+                        disabled={selected.locked}
+                        aria-label="Rotate right"
+                        onClick={() =>
+                          editItem(selected.id, {
+                            rotation: selected.rotation + Math.PI / 2,
+                          })
+                        }
+                      >
+                        90° right
+                        <RotateCw size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="property-section">
+                    <div className="section-label">MATERIAL COLOR</div>
+                    <div className="swatches">
+                      {furnitureColors.map((c) => (
+                        <button
+                          key={c}
+                          className={selected.color === c ? "chosen" : ""}
+                          style={{ background: c }}
+                          aria-label={`Object color ${c}`}
+                          onClick={() => editItem(selected.id, { color: c })}
+                        >
+                          {selected.color === c && <Check size={12} />}
+                        </button>
+                      ))}
+                      <label
+                        className="custom-color"
+                        title="Custom object color"
+                      >
+                        <Plus size={13} />
+                        <input
+                          aria-label="Custom object color"
+                          type="color"
+                          value={selected.color}
+                          onChange={(e) =>
+                            editItem(selected.id, { color: e.target.value })
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div
+                    className={`fit-note ${selectedIssues.length ? "has-issues" : ""}`}
+                  >
+                    <span>
+                      {selectedIssues.length ? (
+                        <Ruler size={15} />
+                      ) : (
+                        <Check size={15} />
+                      )}
+                    </span>
+                    <div>
+                      <strong>
+                        {selectedIssues.length
+                          ? "A little adjustment needed"
+                          : selected.dimensionSource === "estimated"
+                            ? "Looks good in this draft"
+                            : "No placement conflicts"}
+                      </strong>
+                      <p>
+                        {selectedIssues.length
+                          ? selectedIssues[0].message
+                          : selected.dimensionSource === "estimated"
+                            ? "Confirm dimensions before deciding on a tight fit."
+                            : "Based on the dimensions entered."}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="object-actions">
+                    <button
+                      onClick={() => {
+                        const item = {
+                          ...clone(selected),
+                          id: crypto.randomUUID(),
+                          name: selected.name + " copy",
+                          position: {
+                            x: selected.position.x + 0.3,
+                            z: selected.position.z + 0.3,
+                          },
+                          locked: false,
+                        };
+                        if (editLayout((l) => l.items.push(item)))
+                          setSelectedId(item.id);
+                      }}
+                    >
+                      <Copy size={13} />
+                      Duplicate
+                    </button>
+                    <button
+                      onClick={() =>
+                        editItem(selected.id, { visible: !selected.visible })
+                      }
+                    >
+                      {selected.visible ? (
+                        <EyeOff size={13} />
+                      ) : (
+                        <Eye size={13} />
+                      )}{" "}
+                      {selected.visible ? "Put aside" : "Bring back"}
+                    </button>
+                  </div>
+                </>
+              ) : tab === "object" ? (
+                <div className="empty-properties">
+                  <div className="empty-symbol">
+                    <MousePointer2 size={27} strokeWidth={1} />
+                  </div>
+                  <span className="eyebrow">EVERYTHING HAS A PLACE</span>
+                  <h2>
+                    What would you
+                    <br />
+                    like to move?
+                  </h2>
+                  <p>
+                    Select something in the room or from your furniture list to
+                    explore its possibilities.
+                  </p>
+                  <div className="empty-divider" />
+                  <div className="tip">
+                    <span>01</span>
+                    <p>Click a piece to select it.</p>
+                  </div>
+                  <div className="tip">
+                    <span>02</span>
+                    <p>Move it, or try a replacement.</p>
+                  </div>
+                  <div className="tip">
+                    <span>03</span>
+                    <p>Compare the result before committing.</p>
+                  </div>
+                  <button
+                    className="button outline"
+                    onClick={() => setModal("catalog")}
+                  >
+                    <Plus size={14} />
+                    Find something new
+                  </button>
+                </div>
+              ) : (
+                <div className="finishes-content">
+                  <span className="eyebrow">SET THE MOOD</span>
+                  <h2>
+                    A fresh coat.
+                    <br />A fresh feeling.
+                  </h2>
+                  <p>Try a quieter neutral or a little more personality.</p>
+                  <div className="property-section">
+                    <div className="section-label">
+                      ROOM WALLS
+                      <label className="custom-color">
+                        <Plus size={12} />
+                        <input
+                          aria-label="Custom wall color"
+                          type="color"
+                          value={layout.wallColor}
+                          onChange={(e) =>
+                            editLayout((l) => (l.wallColor = e.target.value))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="swatches large">
+                      {colors.map((c) => (
+                        <button
+                          key={c}
+                          className={layout.wallColor === c ? "chosen" : ""}
+                          style={{ background: c }}
+                          aria-label={`Wall color ${c}`}
+                          onClick={() => editLayout((l) => (l.wallColor = c))}
+                        >
+                          {layout.wallColor === c && <Check size={15} />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="property-section">
+                    <div className="section-label">
+                      ACCENT WALL
+                      <label className="custom-color">
+                        <Plus size={12} />
+                        <input
+                          aria-label="Custom accent color"
+                          type="color"
+                          value={layout.accentColor}
+                          onChange={(e) =>
+                            editLayout((l) => (l.accentColor = e.target.value))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="swatches large">
+                      {colors.map((c) => (
+                        <button
+                          key={c}
+                          className={layout.accentColor === c ? "chosen" : ""}
+                          style={{ background: c }}
+                          aria-label={`Accent color ${c}`}
+                          onClick={() => editLayout((l) => (l.accentColor = c))}
+                        >
+                          {layout.accentColor === c && <Check size={15} />}
+                        </button>
+                      ))}
+                    </div>
+                    <small className="muted-note">
+                      Applied to the back wall.
+                    </small>
+                  </div>
+                  <div className="finish-note">
+                    <Palette size={17} />
+                    <p>
+                      Colors are a preview. Lighting and your screen affect how
+                      paint appears.
+                    </p>
+                  </div>
+                </div>
+              )}
+              <div className="properties-footer">
+                <span
+                  className={`status-dot ${issues.length ? "warning" : ""}`}
+                />
+                {issues.length
+                  ? `${issues.length} placement ${issues.length === 1 ? "note" : "notes"}`
+                  : "Room to move, room to breathe"}
+                <button
+                  aria-label="Show placement notes"
+                  onClick={() => {
+                    setShowClearances(true);
+                    notify(
+                      issues.length
+                        ? issues
+                            .map((i) => i.message)
+                            .slice(0, 2)
+                            .join(" ")
+                        : "No overlaps or doorway conflicts in this draft. Dimensions still need verification.",
+                    );
+                  }}
+                >
+                  <ArrowUpRight size={12} />
                 </button>
               </div>
             </>
-          ) : tab === "object" ? (
-            <div className="empty-properties">
-              <div className="empty-symbol">
-                <MousePointer2 size={27} strokeWidth={1} />
-              </div>
-              <span className="eyebrow">EVERYTHING HAS A PLACE</span>
-              <h2>
-                What would you
-                <br />
-                like to move?
-              </h2>
-              <p>
-                Select something in the room or from your furniture list to
-                explore its possibilities.
-              </p>
-              <div className="empty-divider" />
-              <div className="tip">
-                <span>01</span>
-                <p>Click a piece to select it.</p>
-              </div>
-              <div className="tip">
-                <span>02</span>
-                <p>Drag it to try a new spot.</p>
-              </div>
-              <div className="tip">
-                <span>03</span>
-                <p>Step inside. See how it feels.</p>
-              </div>
-              <button
-                className="button outline"
-                onClick={() => setModal("catalog")}
-              >
-                <Plus size={14} />
-                Find something new
-              </button>
-            </div>
-          ) : (
-            <div className="finishes-content">
-              <span className="eyebrow">SET THE MOOD</span>
-              <h2>
-                A fresh coat.
-                <br />A fresh feeling.
-              </h2>
-              <p>Try a quieter neutral or a little more personality.</p>
-              <div className="property-section">
-                <div className="section-label">
-                  ROOM WALLS
-                  <label className="custom-color">
-                    <Plus size={12} />
-                    <input
-                      aria-label="Custom wall color"
-                      type="color"
-                      value={layout.wallColor}
-                      onChange={(e) =>
-                        editLayout((l) => (l.wallColor = e.target.value))
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="swatches large">
-                  {colors.map((c) => (
-                    <button
-                      key={c}
-                      className={layout.wallColor === c ? "chosen" : ""}
-                      style={{ background: c }}
-                      aria-label={`Wall color ${c}`}
-                      onClick={() => editLayout((l) => (l.wallColor = c))}
-                    >
-                      {layout.wallColor === c && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="property-section">
-                <div className="section-label">
-                  ACCENT WALL
-                  <label className="custom-color">
-                    <Plus size={12} />
-                    <input
-                      aria-label="Custom accent color"
-                      type="color"
-                      value={layout.accentColor}
-                      onChange={(e) =>
-                        editLayout((l) => (l.accentColor = e.target.value))
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="swatches large">
-                  {colors.map((c) => (
-                    <button
-                      key={c}
-                      className={layout.accentColor === c ? "chosen" : ""}
-                      style={{ background: c }}
-                      aria-label={`Accent color ${c}`}
-                      onClick={() => editLayout((l) => (l.accentColor = c))}
-                    >
-                      {layout.accentColor === c && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-                <small className="muted-note">Applied to the back wall.</small>
-              </div>
-              <div className="finish-note">
-                <Palette size={17} />
-                <p>
-                  Colors are a preview. Lighting and your screen affect how
-                  paint appears.
-                </p>
-              </div>
-            </div>
           )}
-          <div className="properties-footer">
-            <span className={`status-dot ${issues.length ? "warning" : ""}`} />
-            {issues.length
-              ? `${issues.length} placement ${issues.length === 1 ? "note" : "notes"}`
-              : "Room to move, room to breathe"}
-            <button
-              aria-label="Show placement notes"
-              onClick={() => {
-                setShowClearances(true);
-                notify(
-                  issues.length
-                    ? issues
-                        .map((i) => i.message)
-                        .slice(0, 2)
-                        .join(" ")
-                    : "No overlaps or doorway conflicts in this draft. Dimensions still need verification.",
-                );
-              }}
-            >
-              <ArrowUpRight size={12} />
-            </button>
-          </div>
         </aside>
       </main>
       <section className="layouts-section" aria-label="Saved layouts">

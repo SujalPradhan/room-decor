@@ -1,0 +1,26 @@
+{
+  "environment": {
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+    "viewport": [
+      1440,
+      1000
+    ],
+    "devicePixelRatio": 2,
+    "drawCalls": 903,
+    "triangles": 172042
+  },
+  "performance": {
+    "durationMs": 3010.7,
+    "frames": 180,
+    "meanFrameMs": 16.666666666666668,
+    "medianFrameMs": 16.699999999999818,
+    "p95FrameMs": 17.399999999999636,
+    "approximateRafHz": 59.99999999999999,
+    "note": "One warmed-up three-second orbit sample on Apple M4 Metal. No concurrent browser test suite. Not sustained, thermal or battery validation."
+  },
+  "externalRequestsBlocked": [
+    "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Manrope:wght@400;500;600;650;700&display=swap"
+  ],
+  "errors": [],
+  "offlineNote": "Original warm performance sample blocked one obsolete Google Fonts URL. Fonts were subsequently self-hosted; a separate final smoke check recorded zero external requests and zero errors."
+}

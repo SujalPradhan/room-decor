@@ -1,0 +1,151 @@
+{
+  "blender": "4.5.15 LTS",
+  "bytes": 9116196,
+  "rootCount": 14,
+  "triangles": 110380,
+  "embeddedImages": 57,
+  "validation": "PASS:GLB2,14 exact roots,unit bounds,floor contact,identity transforms,all meshes UV mapped,14 primary materials,size/triangle budgets",
+  "assets": [
+    {
+      "kind": "bed",
+      "sourceBounds": [
+        1.495823860168457,
+        2.0805001258850098,
+        0.9200000166893005
+      ],
+      "meshes": 33,
+      "triangles": 18724
+    },
+    {
+      "kind": "wardrobe",
+      "sourceBounds": [
+        1.2999999523162842,
+        0.6319999694824219,
+        2.0399999618530273
+      ],
+      "meshes": 25,
+      "triangles": 3236
+    },
+    {
+      "kind": "desk",
+      "sourceBounds": [
+        1.25,
+        0.6200000047683716,
+        0.7639999985694885
+      ],
+      "meshes": 11,
+      "triangles": 2068
+    },
+    {
+      "kind": "chair",
+      "sourceBounds": [
+        0.6230000257492065,
+        0.6296128034591675,
+        1.113999843597412
+      ],
+      "meshes": 29,
+      "triangles": 5996
+    },
+    {
+      "kind": "floor-bed",
+      "sourceBounds": [
+        1.0509774684906006,
+        1.7999999523162842,
+        0.13889724016189575
+      ],
+      "meshes": 4,
+      "triangles": 4076
+    },
+    {
+      "kind": "pedestal-fan",
+      "sourceBounds": [
+        0.46000000834465027,
+        0.34000006318092346,
+        1.2400000095367432
+      ],
+      "meshes": 63,
+      "triangles": 15924
+    },
+    {
+      "kind": "stool",
+      "sourceBounds": [
+        0.3700000047683716,
+        0.3700000047683716,
+        0.42000001668930054
+      ],
+      "meshes": 9,
+      "triangles": 1804
+    },
+    {
+      "kind": "plant",
+      "sourceBounds": [
+        0.5360876321792603,
+        0.6538127064704895,
+        0.8453184962272644
+      ],
+      "meshes": 37,
+      "triangles": 4868
+    },
+    {
+      "kind": "shelf",
+      "sourceBounds": [
+        0.8199999928474426,
+        0.33000001311302185,
+        1.5800000429153442
+      ],
+      "meshes": 50,
+      "triangles": 9676
+    },
+    {
+      "kind": "bed-platform",
+      "sourceBounds": [
+        1.495823860168457,
+        2.0875000953674316,
+        0.9350000023841858
+      ],
+      "meshes": 41,
+      "triangles": 17220
+    },
+    {
+      "kind": "bed-upholstered",
+      "sourceBounds": [
+        1.495823860168457,
+        2.119999885559082,
+        1.0199999809265137
+      ],
+      "meshes": 36,
+      "triangles": 17960
+    },
+    {
+      "kind": "wardrobe-sliding",
+      "sourceBounds": [
+        1.600000023841858,
+        0.6319999694824219,
+        2.0399999618530273
+      ],
+      "meshes": 16,
+      "triangles": 2096
+    },
+    {
+      "kind": "desk-oak",
+      "sourceBounds": [
+        1.399999976158142,
+        0.6200000047683716,
+        0.7674999833106995
+      ],
+      "meshes": 14,
+      "triangles": 2416
+    },
+    {
+      "kind": "chair-task",
+      "sourceBounds": [
+        0.6230000257492065,
+        0.6296128034591675,
+        1.0247931480407715
+      ],
+      "meshes": 37,
+      "triangles": 4316
+    }
+  ],
+  "thumbnailsGenerated": true
+}

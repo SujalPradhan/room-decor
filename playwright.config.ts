@@ -7,6 +7,8 @@ const installedChrome = join(
   homedir(),
   "Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
 );
+const baseURL = process.env.ROOMSHIFT_BASE_URL ?? "http://127.0.0.1:5173";
+const port = new URL(baseURL).port || "5173";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
@@ -16,7 +18,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL,
     viewport: { width: 1512, height: 982 },
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
@@ -33,8 +35,8 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
   webServer: {
-    command: "npm run dev",
-    url: "http://127.0.0.1:5173",
+    command: `npm run dev -- --port ${port}`,
+    url: baseURL,
     reuseExistingServer: true,
     timeout: 60_000,
   },

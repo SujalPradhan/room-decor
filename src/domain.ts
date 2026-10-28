@@ -8,6 +8,7 @@ import type {
   Project,
   RoomSpec,
 } from "./types";
+import { isSupportedAssetId } from './catalog';
 
 const EPS = 1e-6;
 const MAX_ITEMS = 80;
@@ -447,7 +448,9 @@ function parseItem(value: unknown): FurnitureItem {
     !["estimated", "measured", "product"].includes(i.dimensionSource as string)
   )
     fail("Unknown dimension source.");
+  if(i.assetId!==undefined&&!isSupportedAssetId(i.assetId))fail('Unknown or invalid furniture asset ID.');
   return {
+    ...(i.assetId===undefined?{}:{assetId:i.assetId as string}),
     id: string(i.id, "Furniture ID"),
     name: string(i.name, "Furniture name"),
     kind: i.kind as ItemKind,

@@ -19,6 +19,7 @@ export interface Position {
   z: number;
 }
 export interface FurnitureItem {
+  assetId?: string;
   id: string;
   name: string;
   kind: ItemKind;
@@ -58,6 +59,7 @@ export interface PlacementIssue {
   itemIds: string[];
 }
 export interface SceneState {
+  ghostItem?: FurnitureItem | null;
   room: RoomSpec;
   layout: Layout;
   selectedId: string | null;
@@ -72,6 +74,7 @@ export interface SceneCallbacks {
   onError?: (message: string) => void;
 }
 export interface SceneController {
+  focusItem?: (id: string) => void;
   update: (state: SceneState) => void;
   resetView: () => void;
   capture: () => string;
