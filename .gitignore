@@ -7,3 +7,6 @@ playwright-report/
 .env*
 .sites-checkout/
 artifacts/
+
+__pycache__/
+*.pyc

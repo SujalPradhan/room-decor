@@ -1,45 +1,52 @@
-# Roomshift
+# Roomshift — Laptop Studio
 
-A browser room editor based on the user's room walkthrough and photographs. Rearrange grouped furniture, try new pieces at explicit dimensions, compare layouts, recolor walls and walk through the room.
+A local room editor focused on realistic furniture replacement. Phone photos provide appearance/capture input; the laptop provides the main editing workspace. This iteration is developed on `realism-laptop`, preserving the first release on `main`.
 
-The interface follows the visual direction of [Dream Room](https://github.com/Jivraj-18/dream-room-blender). This implementation and its furniture models were authored separately. Blender-generated grouped GLB assets load into a Three.js renderer, with procedural fallbacks.
+Public studio: https://roomshift-studio.dearmacaw4.chatgpt.site
 
-## Run
+## Open on the laptop
 
-Requires Node.js 22.12 or later.
+Double-click **Open Roomshift.command**, or run:
 
 ```sh
 npm ci
-npm run dev
+npm run laptop
 ```
 
-Open the printed local address. To test from an Android phone connected by USB:
+The launcher opens `http://127.0.0.1:5174` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 22.12 or later is required. The local launcher runs the same editor on your laptop.
 
-```sh
-adb reverse tcp:5173 tcp:5173
-```
+## Replace a piece
 
-Then open `http://127.0.0.1:5173` on the phone.
+1. Select furniture in the room or inventory and choose **Try a replacement**.
+2. Choose a detailed library model or **Bring your own 3D model** using a GLB from Blender, a scan or another 3D tool.
+3. Enter its outer dimensions. **Before / After** uses the same camera and position; the old footprint appears as a faint comparison outline.
+4. Choose **Use this piece**, or keep the current piece. Confirmation is one undoable change. Preview and cancellation do not save changes.
 
-## Use
+The collection contains 14 authored models, including timber/platform/upholstered beds, two wardrobe designs, green/oak desks and chair variants. PBR textures, cloth folds, more faithful silhouettes, natural camera framing, local HDR lighting and contact shading improve the original view. [Asset details](public/assets/REALISTIC_ASSETS.md), [generic surface sources](public/assets/SURFACE_SOURCES.md).
 
-- Select furniture from the room or inventory, then drag it on the floor.
-- Change dimensions, rotate, lock, duplicate, recolor or put an item aside.
-- Use 2D plan, orbit and walk views. Walking supports keyboard and touch controls and checks furniture collisions.
-- Try saved layouts or create a named copy. Editing Original creates an alternative automatically.
-- Use Finishes to change the room and accent-wall colors.
-- Use Export for a portable project JSON or a room PNG. Open a JSON project with the upload button.
-- Add photo/video references from the reference library. These remain in memory for the current session.
+You can still drag, rotate, resize, hide, delete, duplicate and lock furniture; recolor walls; use plan/orbit/walk views; save layout alternatives; and export project JSON or PNG. Editing Original preserves it and creates an alternative. Walkthrough is secondary to furniture editing.
 
-Projects save in this browser's local storage. They do not synchronize across devices; export and import to transfer them. Hosted access is owner-private. Source media is not included in this repository or deployed site.
+## Edit dimensions and delete
 
-## Accuracy and scope
+Select a piece and use **Delete** in its properties, or press Delete/Backspace outside a text field. Locked pieces must be unlocked first. Ctrl/⌘Z restores a deleted piece; Ctrl/⌘Shift+Z or Ctrl/⌘Y redoes the change.
 
-The initial 4.2 × 4.8 × 2.85 m room and furniture dimensions are **estimates**, not recovered measurements. Door/window positions and hidden geometry are interpretations. Measure the relevant dimensions before deciding on a tight fit or purchase. The checked-measurements control records the user's confirmation; it is not an automatic measurement.
+Dimension fields keep your typing until you press Enter, Tab, or click outside. Type the full number (for example, 150), including decimals. Escape cancels; empty or out-of-range entries keep the previous dimension. Each finished dimension edit is one undo step. Resizing a piece marks its measurements as estimated until checked again.
 
-Placement checks cover oriented footprints, room bounds, entry-door swing and furniture use clearances. Walk mode checks a body-radius obstacle model and doorway passage. It is not a building-compliance or delivery-route assessment. The editor does not currently perform native ARCore capture, automatic photo reconstruction or product scraping.
+## Phone photos and imported models
 
-## Validation
+Add a photo beside a replacement as an appearance reference, or add photo/video references from the reference library. References remain in the browser session. Adding a photo does not claim to recover a measured 3D object automatically.
+
+Imported GLBs are validated and stored in this browser's IndexedDB. Project JSON contains model IDs, not binary files. Keep the original GLB when transferring work to another browser; unavailable models show an editable placeholder and a relinking note. The importer accepts embedded-resource GLB 2 files up to 30 MB; externally referenced resources or decoder-dependent compression must first be exported as a self-contained model.
+
+Apple Object Capture is supported on this M4 Mac. An optional local reconstruction tool and USDZ-to-GLB bridge are provided for a suitable object-focused photo sequence. The capability probe and a generated USDZ conversion fixture pass; real reconstruction quality still needs a good photo dataset. [Photo workflow and commands](docs/PHONE_PHOTOS_TO_OBJECT.md), [model/hardware research](docs/REALISM_PLAN.md).
+
+## Dimensions and storage
+
+Initial room and furniture dimensions are **estimates**, not recovered measurements. Door/window positions and hidden geometry are interpreted from the supplied evidence. Confirm dimensions before deciding a tight fit or purchase. Placement checks cover oriented footprints, room bounds, entry-door swing and usage clearances; they are not a delivery-route or compliance assessment.
+
+Layouts save per browser in local storage. JSON export/import transfers project data. Original room photos and video are not included in GitHub or sent to model providers. Generic materials, HDR lighting and fonts are served locally. The editor has no required runtime cloud service.
+
+## Validation and reproduction
 
 ```sh
 npm test
@@ -48,17 +55,12 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Unit tests cover geometry, doorway movement, default layouts and strict project import. Browser tests exercise the real rendered scene, grouping/dragging, undo/redo, dimensions, visibility, finishes, layout persistence, import/export and touch controls. GitHub Actions runs these checks for pushes and pull requests.
+For the development server on 5174:
 
-Physical POCO validation is documented in [the device report](docs/POCO_DEVICE_RESULTS.json). The opt-in `node scripts/test-device.mjs` runner attaches to the Roomshift Chrome tab through a forwarded CDP endpoint, exercises touch controls, and restores the prior project.
+```sh
+ROOMSHIFT_BASE_URL=http://127.0.0.1:5174 npm run test:e2e
+```
 
-The asset rebuild validates GLB structure, semantic roots, normalized bounds, grounded pivots and editable materials. See [asset notes](public/assets/ASSETS.md) for the Blender reproduction command. See [validation record](docs/VALIDATION.md) for observed results and limits.
+The Blender rebuild validates 14 roots, portable maps, UVs, normalized bounds and floor pivots. The local editable source is retained under ignored `artifacts/furniture-realistic.blend`; the build script recreates it. [Laptop validation](docs/LAPTOP_VALIDATION.md), [first-release and POCO validation](docs/VALIDATION.md).
 
-## Project notes
-
-- [Product and technical plan](docs/PROJECT_PLAN.md)
-- [Video observations](docs/VIDEO_REVIEW.md)
-- [Capture guide](docs/CAPTURE_GUIDE.md)
-- [Reference audit](docs/REFERENCE_REPO_AUDIT.md)
-
-The production bundle includes React, Three.js and Lucide under their respective open-source licenses. Fonts are requested from Google Fonts; font availability does not affect editor behavior.
+The interface follows the visual direction of [Dream Room](https://github.com/Jivraj-18/dream-room-blender); application code and furniture are independently authored. Runtime dependencies include React, Three.js and Lucide under their respective open-source licenses. Generic Poly Haven maps are CC0; authored materials are recorded with the assets.

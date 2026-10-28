@@ -2,6 +2,15 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
+import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { createSurfaceLibrary, type SurfaceKind } from "./realism-surfaces";
+import { getLocalModel } from "./local-assets";
+import { getCatalogAsset } from "./catalog";
 import { canStand } from "./domain";
 import type {
   FurnitureItem,
@@ -470,11 +479,20 @@ function curtain(
   for (let i = 0; i < pos.count; i++)
     pos.setZ(i, Math.sin((pos.getX(i) / width + 0.5) * Math.PI * 10) * 0.027);
   geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({
+  const sheer = color === "#dedfd0";
+  const mat = new THREE.MeshPhysicalMaterial({
     color,
-    roughness: 0.95,
+    roughness: 0.94,
     side: THREE.DoubleSide,
+    sheen: 0.65,
+    sheenRoughness: 0.86,
+    sheenColor: new THREE.Color("#e0e4d8"),
+    transparent: sheer,
+    opacity: sheer ? 0.76 : 1,
+    depthWrite: !sheer,
   });
+  mat.name = "FABRIC_Curtain";
+  mat.userData.surface = "fabric";
   mesh(parent, geo, mat, x, height / 2, 0);
 }
 function windowGroup(
@@ -485,11 +503,15 @@ function windowGroup(
 ): THREE.Group {
   const g = new THREE.Group(),
     frame = material("#eee9dc"),
-    glass = new THREE.MeshStandardMaterial({
-      color: "#bfd3cc",
-      roughness: 0.35,
+    glass = new THREE.MeshPhysicalMaterial({
+      color: "#e4eeeb",
+      roughness: 0.12,
+      metalness: 0,
+      transmission: 0.2,
+      thickness: 0.012,
+      ior: 1.46,
       transparent: true,
-      opacity: 0.68,
+      opacity: 0.28,
       side: THREE.DoubleSide,
     });
   box(g, [width + 0.1, 0.055, 0.11], frame, [0, sill - 0.025, 0]);
@@ -498,18 +520,14 @@ function windowGroup(
     box(g, [0.032, height, 0.06], frame, [x, sill + height / 2, 0]);
   for (const y of [sill, sill + height])
     box(g, [width + 0.04, 0.04, 0.06], frame, [0, y, 0]);
-  const outdoor = material("#a5b9a5");
-  for (let i = 0; i < 5; i++) {
-    const leaf = sphere(
-      g,
-      0.18,
-      outdoor,
-      -width * 0.4 + i * width * 0.2,
-      sill + height * 0.3 + Math.sin(i) * 0.15,
-      -0.1,
-    );
-    leaf.scale.set(0.6, 1.5, 0.15);
-  }
+  // A softly lit exterior plane avoids inventing a detailed outdoor scene.
+  const daylight = box(
+    g,
+    [width - 0.02, height - 0.02, 0.015],
+    new THREE.MeshBasicMaterial({ color: "#dbe4df" }),
+    [0, sill + height / 2, -0.09],
+  );
+  daylight.castShadow = false;
   const rodMat = material("#777c6c", 0.4, 0.5);
   rod(
     g,
@@ -569,12 +587,13 @@ export function createRoomScene(
     powerPreference: "high-performance",
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.needsUpdate = true;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.04;
+  renderer.toneMapping = THREE.AgXToneMapping;
+  renderer.toneMappingExposure = 1.05;
   renderer.domElement.style.cssText =
     "display:block;width:100%;height:100%;touch-action:none;outline:none";
   renderer.domElement.tabIndex = 0;
@@ -585,13 +604,13 @@ export function createRoomScene(
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog("#344139", 18, 38);
-  const perspective = new THREE.PerspectiveCamera(37, 1, 0.03, 70),
+  const perspective = new THREE.PerspectiveCamera(52, 1, 0.03, 100),
     plan = new THREE.OrthographicCamera(-4, 4, 4, -4, 0.01, 60);
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective;
   const controls = new OrbitControls(perspective, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
-  controls.minDistance = 3.5;
+  controls.minDistance = 1.15;
   controls.maxDistance = 18;
   controls.maxPolarAngle = Math.PI * 0.475;
   controls.minPolarAngle = 0.18;
@@ -599,9 +618,9 @@ export function createRoomScene(
   controls.addEventListener("change", () => {
     dirty = true;
   });
-  scene.add(new THREE.HemisphereLight("#fff6e7", "#5e786a", 2.1));
-  const sun = new THREE.DirectionalLight("#fff3df", 2.3);
-  sun.position.set(3.5, 8, 5);
+  scene.add(new THREE.HemisphereLight("#e5eff4", "#8d7f65", 0.55));
+  const sun = new THREE.DirectionalLight("#fff4de", 1.9);
+  sun.position.set(3.5, 4.5, 6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   Object.assign(sun.shadow.camera, {
@@ -612,17 +631,17 @@ export function createRoomScene(
     near: 0.2,
     far: 22,
   });
-  sun.shadow.normalBias = 0.025;
+  sun.shadow.normalBias = 0.012;
   sun.shadow.bias = -0.0002;
   sun.shadow.radius = 2;
   scene.add(sun);
-  const fill = new THREE.DirectionalLight("#d8e4e0", 1.1);
+  const fill = new THREE.DirectionalLight("#d8e4e0", 0.38);
   fill.position.set(5, 5, -3);
   scene.add(fill);
   const ground = mesh(
     scene,
     new THREE.PlaneGeometry(200, 200),
-    material("#2a382f"),
+    material("#747568"),
     0,
     -0.2,
     0,
@@ -631,57 +650,229 @@ export function createRoomScene(
   ground.receiveShadow = true;
   const roomRoot = new THREE.Group(),
     furnitureRoot = new THREE.Group(),
-    overlayRoot = new THREE.Group();
-  scene.add(roomRoot, furnitureRoot, overlayRoot);
+    overlayRoot = new THREE.Group(),
+    ghostRoot = new THREE.Group();
+  scene.add(roomRoot, furnitureRoot, overlayRoot, ghostRoot);
   let objectMap = new Map<string, THREE.Group>(),
     roomSignature = "",
     furnitureSignature = "",
     overlaySignature = "";
-  const glbTemplates = new Map<string, THREE.Object3D>();
-  let authoredAssetRoot: THREE.Group | null = null;
-  // Each authored root has a normalized bottom-center origin. Individual
-  // instances own geometry/materials so recoloring or deletion never affects
-  // another item, another layout, or the reusable source asset.
-  new GLTFLoader().load(
-    "/assets/furniture.glb",
-    (gltf) => {
+  const glbTemplates = new Map<string, THREE.Object3D>(),
+    sourceRoots: THREE.Object3D[] = [],
+    sourceTextures = new Set<THREE.Texture>(),
+    pendingLocal = new Set<string>(),
+    failedLocal = new Set<string>();
+  const assetWarnings = new Set<string>();
+  let ghostSignature = "",
+    environmentReady = false,
+    environmentTarget: THREE.WebGLRenderTarget | null = null,
+    lastRenderMs = 0,
+    renderedFrames = 0;
+  const renderTimings: number[] = [];
+  renderer.info.autoReset = false;
+  const composer = new EffectComposer(
+    renderer,
+    new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      samples: 2,
+    }),
+  );
+  const ssao = new SSAOPass(scene, perspective, 1, 1);
+  ssao.kernelRadius = 0.16;
+  ssao.minDistance = 0.001;
+  ssao.maxDistance = 0.08;
+  composer.addPass(new RenderPass(scene, perspective));
+  composer.addPass(ssao);
+  composer.addPass(new OutputPass());
+  composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  const surfaces = createSurfaceLibrary(renderer, () => {
+    roomSignature = "";
+    furnitureSignature = "";
+    buildRoom();
+    buildFurnitureGroups();
+    ghostSignature = "";
+    buildGhost();
+    dirty = true;
+  });
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  new HDRLoader().load(
+    "/assets/environment/studio_small_09_1k.hdr",
+    (texture) => {
       if (disposed) {
-        disposeTree(gltf.scene);
+        texture.dispose();
         return;
       }
-      authoredAssetRoot = gltf.scene;
-      const kinds: ItemKind[] = [
-        "bed",
-        "wardrobe",
-        "desk",
-        "chair",
-        "floor-bed",
-        "pedestal-fan",
-        "stool",
-        "plant",
-        "shelf",
-      ];
-      gltf.scene.traverse((o) => {
-        const kind = String(o.userData.kind || o.name);
-        if (kinds.includes(kind as ItemKind)) glbTemplates.set(kind, o);
-      });
-      furnitureSignature = "";
-      buildFurnitureGroups();
-      overlaySignature = "";
-      buildOverlays();
+      environmentTarget = pmrem.fromEquirectangular(texture);
+      scene.environment = environmentTarget.texture;
+      scene.environmentIntensity = 0.75;
+      texture.dispose();
+      pmrem.dispose();
+      environmentReady = true;
       dirty = true;
     },
     undefined,
     () => {
-      /* The built-in models also support offline asset fallback. */
+      pmrem.dispose();
     },
   );
-
+  RectAreaLightUniformsLib.init();
+  const windowLight = new THREE.RectAreaLight("#fff5e6", 4.0, 1.5, 1.5);
+  windowLight.position.set(
+    state.room.width * 0.17,
+    1.6,
+    -state.room.depth / 2 + 0.16,
+  );
+  windowLight.lookAt(0, 0.7, 0);
+  scene.add(windowLight);
+  const sideLight = new THREE.RectAreaLight("#e3edf1", 3.1, 1.42, 1.5);
+  sideLight.position.set(
+    -state.room.width / 2 + 0.16,
+    1.6,
+    -state.room.depth * 0.12,
+  );
+  sideLight.lookAt(0, 0.65, 0.4);
+  scene.add(sideLight);
+  function registerSource(root: THREE.Object3D) {
+    sourceRoots.push(root);
+    root.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of ms)
+          for (const value of Object.values(m))
+            if (value instanceof THREE.Texture) sourceTextures.add(value);
+      }
+    });
+  }
+  function refreshAssets() {
+    furnitureSignature = "";
+    buildFurnitureGroups();
+    overlaySignature = "";
+    buildOverlays();
+    ghostSignature = "";
+    buildGhost();
+    dirty = true;
+  }
+  const assetLoader = new GLTFLoader();
+  function loadBuiltin(url: string, fallback = false) {
+    assetLoader.load(
+      url,
+      (gltf) => {
+        if (disposed) {
+          disposeTree(gltf.scene);
+          return;
+        }
+        registerSource(gltf.scene);
+        const names = new Set([
+          "bed",
+          "wardrobe",
+          "desk",
+          "chair",
+          "floor-bed",
+          "pedestal-fan",
+          "stool",
+          "plant",
+          "shelf",
+          "bed-platform",
+          "bed-upholstered",
+          "wardrobe-sliding",
+          "desk-oak",
+          "chair-task",
+        ]);
+        gltf.scene.traverse((o) => {
+          const kind = String(o.userData.kind || o.name);
+          if (names.has(kind)) glbTemplates.set(kind, o);
+        });
+        refreshAssets();
+      },
+      undefined,
+      () => {
+        if (!fallback) loadBuiltin("/assets/furniture.glb", true);
+      },
+    );
+  }
+  loadBuiltin("/assets/furniture-realistic.glb");
+  function ensureLocalTemplate(assetId: string) {
+    if (
+      pendingLocal.has(assetId) ||
+      failedLocal.has(assetId) ||
+      glbTemplates.has(assetId)
+    )
+      return;
+    pendingLocal.add(assetId);
+    getLocalModel(assetId)
+      .then((buffer) => {
+        if (!buffer)
+          throw new Error("This imported model is not stored on this device.");
+        return assetLoader.parseAsync(buffer, "");
+      })
+      .then((gltf) => {
+        pendingLocal.delete(assetId);
+        if (disposed) {
+          disposeTree(gltf.scene);
+          return;
+        }
+        const bounds = new THREE.Box3().setFromObject(gltf.scene),
+          size = bounds.getSize(new THREE.Vector3());
+        if (
+          ![size.x, size.y, size.z].every(
+            (v) => Number.isFinite(v) && v > 0.00001,
+          )
+        ) {
+          disposeTree(gltf.scene);
+          throw new Error("The imported model has no usable 3D bounds.");
+        }
+        const center = bounds.getCenter(new THREE.Vector3()),
+          normalized = new THREE.Group();
+        gltf.scene.position.sub(
+          new THREE.Vector3(center.x, bounds.min.y, center.z),
+        );
+        normalized.add(gltf.scene);
+        normalized.scale.set(1 / size.x, 1 / size.y, 1 / size.z);
+        registerSource(normalized);
+        glbTemplates.set(assetId, normalized);
+        refreshAssets();
+      })
+      .catch(() => {
+        pendingLocal.delete(assetId);
+        failedLocal.add(assetId);
+        assetWarnings.add(
+          "An imported model is unavailable here; its dimensioned placeholder remains editable.",
+        );
+        dirty = true;
+      });
+  }
+  function surfaceOf(
+    mat: THREE.Material,
+    item: FurnitureItem,
+  ): SurfaceKind | undefined {
+    if (mat.userData.surface) return mat.userData.surface as SurfaceKind;
+    if (/wood|oak|walnut|timber/i.test(mat.name)) return "wood";
+    if (/fabric|cotton|linen|pillow|throw|upholster|cloth/i.test(mat.name))
+      return "fabric";
+    if (/metal|brass|steel/i.test(mat.name)) return "metal";
+    if (mat.name.startsWith("BODY_"))
+      return ["bed", "chair", "floor-bed"].includes(item.kind)
+        ? "fabric"
+        : "paint";
+    return undefined;
+  }
   function instantiateFurniture(item: FurnitureItem): THREE.Group {
-    const template = glbTemplates.get(item.kind);
+    const key = item.assetId?.startsWith("local:")
+      ? item.assetId
+      : item.assetId?.replace(/^builtin:/, "") || item.kind;
+    if (key.startsWith("local:")) ensureLocalTemplate(key);
+    const template = glbTemplates.get(key) || glbTemplates.get(item.kind);
     if (!template) return buildFurniture(item);
     const root = new THREE.Group(),
+      scaled = new THREE.Group(),
       model = template.clone(true);
+    const defaultColor = getCatalogAsset(
+      item.assetId ?? `builtin:${item.kind}`,
+    )?.color;
+    const customTint =
+      item.color.toLowerCase() !== defaultColor?.toLowerCase() &&
+      item.color.toLowerCase() !== "#ffffff";
     model.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       o.geometry = o.geometry.clone();
@@ -689,26 +880,97 @@ export function createRoomScene(
       o.receiveShadow = true;
       const cloneMaterial = (m: THREE.Material) => {
         const copy = m.clone();
-        if (
-          copy instanceof THREE.MeshStandardMaterial &&
-          (copy.name.startsWith("BODY_") || copy.userData.editableColor)
-        )
-          copy.color.set(item.color);
+        if (copy instanceof THREE.MeshStandardMaterial) {
+          const surface = surfaceOf(copy, item);
+          if (surface)
+            surfaces.apply(copy, surface, { albedo: surface === "wood" });
+          if (
+            customTint &&
+            (copy.name.startsWith("BODY_") || copy.userData.editableColor)
+          )
+            copy.color.set(item.color);
+          copy.envMapIntensity = 0.75;
+        }
         return copy;
       };
       o.material = Array.isArray(o.material)
         ? o.material.map(cloneMaterial)
         : cloneMaterial(o.material);
     });
-    model.scale.set(
+    scaled.scale.set(
       item.dimensions.width,
       item.dimensions.height,
       item.dimensions.depth,
     );
-    root.add(model);
+    scaled.add(model);
+    root.add(scaled);
     root.name = item.kind;
     root.userData.itemId = item.id;
+    root.userData.assetId = item.assetId ?? `builtin:${item.kind}`;
+    root.userData.assetSource = glbTemplates.has(key)
+      ? key.startsWith("local:")
+        ? "local"
+        : "builtin"
+      : "fallback";
     return root;
+  }
+  function buildGhost() {
+    const signature = JSON.stringify(state.ghostItem);
+    if (signature === ghostSignature) return;
+    ghostSignature = signature;
+    disposeTree(ghostRoot);
+    ghostRoot.clear();
+    const item = state.ghostItem;
+    if (!item) return;
+    const model = instantiateFurniture(item);
+    model.position.set(item.position.x, 0.027, item.position.z);
+    model.rotation.y = item.rotation;
+    model.updateMatrixWorld(true);
+    model.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const line = new THREE.LineSegments(
+          new THREE.EdgesGeometry(o.geometry, 28),
+          new THREE.LineBasicMaterial({
+            color: "#a9c7ba",
+            transparent: true,
+            opacity: 0.22,
+            depthWrite: false,
+          }),
+        );
+        line.applyMatrix4(o.matrixWorld);
+        line.renderOrder = 5;
+        ghostRoot.add(line);
+      }
+    });
+    disposeTree(model);
+    dirty = true;
+  }
+  function renderScene() {
+    renderer.info.reset();
+    const before = performance.now();
+    const ceiling = roomRoot.getObjectByName("room-ceiling");
+    if (ceiling) {
+      const show =
+        state.mode === "walk" ||
+        perspective.position.y < state.room.height - 0.12;
+      if (ceiling.visible !== show) {
+        ceiling.visible = show;
+        renderer.shadowMap.needsUpdate = true;
+      }
+    }
+    if (
+      host.clientWidth >= 700 &&
+      state.mode === "orbit" &&
+      !dragging &&
+      !pointer
+    ) {
+      ssao.camera = perspective;
+      composer.render();
+    } else renderer.render(scene, camera);
+    lastRenderMs = performance.now() - before;
+    renderedFrames++;
+    renderTimings.push(lastRenderMs);
+    if (renderTimings.length > 60) renderTimings.shift();
   }
 
   function buildRoom() {
@@ -728,6 +990,10 @@ export function createRoomScene(
       plaster = material(state.layout.wallColor),
       accent = material(state.layout.accentColor),
       trim = material("#d4cbbb");
+    surfaces.apply(plaster, "plaster");
+    surfaces.apply(accent, "plaster");
+    windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
+    sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
     box(roomRoot, [w + 0.18, 0.15, d + 0.18], base, [0, -0.075, 0], 0.025);
     const plankCount = Math.ceil(w / 0.2),
       plankW = w / plankCount;
@@ -736,7 +1002,8 @@ export function createRoomScene(
         i % 3 === 0 ? "#9e7551" : i % 3 === 1 ? "#cfb18b" : "#e0c69f",
       );
       color.offsetHSL(0, 0, Math.sin(i * 5) * 0.025);
-      const mat = material(color.getHex());
+      const mat = material(color.getHex(), 0.64);
+      surfaces.apply(mat, "wood", { normalScale: 0.16 });
       box(roomRoot, [plankW - 0.004, 0.022, d], mat, [
         -w / 2 + plankW * (i + 0.5),
         0.01,
@@ -831,6 +1098,18 @@ export function createRoomScene(
         box(roomRoot, [w, 0.07, d], material("#e5dfd3"), [0, h + 0.015, 0]);
       }
     }
+    if (
+      (state.wallsVisible || state.mode === "walk") &&
+      state.mode !== "plan"
+    ) {
+      const ceiling = box(roomRoot, [w, 0.045, d], material("#eae7df", 0.94), [
+        0,
+        h,
+        0,
+      ]);
+      ceiling.name = "room-ceiling";
+      ceiling.castShadow = true;
+    }
     // Door frame is visible in plan and cutaway view; the opening stays usable.
     const doorMat = material("#786047");
     for (const x of [
@@ -843,7 +1122,7 @@ export function createRoomScene(
       -0.004,
       d / 2 + 0.35,
     ]);
-    if (state.mode === "walk") {
+    if (state.mode !== "plan") {
       const fan = new THREE.Group();
       fan.position.set(0, h - 0.25, -0.05);
       cylinder(fan, 0.09, 0.075, 0.12, material("#463f32"), 0, 0, 0);
@@ -863,6 +1142,13 @@ export function createRoomScene(
       }
       roomRoot.add(fan);
     }
+    roomRoot.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of ms)
+          if (m.userData.surface === "fabric") surfaces.apply(m, "fabric");
+      }
+    });
     renderer.shadowMap.needsUpdate = true;
     dirty = true;
   }
@@ -954,20 +1240,23 @@ export function createRoomScene(
       plan.updateProjectionMatrix();
     } else {
       const aspect = Math.max(
-          0.35,
+          0.5,
           host.clientWidth / Math.max(1, host.clientHeight),
         ),
-        distance = 1.18 * Math.max(1, 1.12 / aspect),
-        targetY = 1.5;
+        fit = Math.max(1, 1.05 / aspect);
+      controls.target.set(
+        -state.room.width * 0.08,
+        1.03,
+        -state.room.depth * 0.12,
+      );
       perspective.up.set(0, 1, 0);
       perspective.position.set(
-        scale * 1.2 * distance,
-        targetY + (scale * 1.16 - 0.72) * distance,
-        scale * 1.38 * distance,
+        state.room.width * 0.59 * fit,
+        1.78 + (fit - 1) * 0.6,
+        state.room.depth * 0.77 * fit,
       );
-      controls.target.set(0, targetY, 0);
       controls.maxDistance = scale * 4.6;
-      perspective.far = Math.max(70, scale * 10);
+      perspective.far = Math.max(100, scale * 10);
       perspective.updateProjectionMatrix();
       controls.update();
     }
@@ -978,6 +1267,7 @@ export function createRoomScene(
       height = Math.max(1, host.clientHeight),
       aspect = width / height;
     renderer.setSize(width, height);
+    composer.setSize(width, height);
     if (
       lastAspect &&
       Math.abs(lastAspect - aspect) > 0.005 &&
@@ -1265,6 +1555,60 @@ export function createRoomScene(
     get assetSource() {
       return glbTemplates.size ? "blender" : "procedural";
     },
+    get assetWarnings() {
+      return [...assetWarnings];
+    },
+    get environmentReady() {
+      return environmentReady;
+    },
+    get surfaceMaps() {
+      return surfaces.loaded;
+    },
+    get lastRenderMs() {
+      return lastRenderMs;
+    },
+    get renderedFrames() {
+      return renderedFrames;
+    },
+    get renderTimings() {
+      return [...renderTimings];
+    },
+    get resources() {
+      return { ...renderer.info.memory };
+    },
+    get itemDimensions() {
+      return Object.fromEntries(
+        [...objectMap].map(([id, g]) => {
+          g.updateMatrixWorld(true);
+          const inverse = g.matrixWorld.clone().invert(),
+            bounds = new THREE.Box3();
+          g.traverse((o) => {
+            if (o instanceof THREE.Mesh) {
+              if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+              bounds.union(
+                o.geometry
+                  .boundingBox!.clone()
+                  .applyMatrix4(inverse.clone().multiply(o.matrixWorld)),
+              );
+            }
+          });
+          const size = bounds.getSize(new THREE.Vector3());
+          return [id, { width: size.x, depth: size.z, height: size.y }];
+        }),
+      );
+    },
+    get itemAssets() {
+      return Object.fromEntries(
+        [...objectMap].map(([id, g]) => [
+          id,
+          {
+            assetId: g.userData.assetId ?? `builtin:${g.name}`,
+            source: g.userData.assetSource ?? "fallback",
+            pending: pendingLocal.has(g.userData.assetId),
+          },
+        ]),
+      );
+    },
     get projectedItems() {
       const rect = renderer.domElement.getBoundingClientRect();
       return Object.fromEntries(
@@ -1323,6 +1667,7 @@ export function createRoomScene(
     buildRoom();
     buildFurnitureGroups();
     buildOverlays();
+    buildGhost();
     resize();
     dirty = true;
   }
@@ -1361,7 +1706,7 @@ export function createRoomScene(
       }
     }
     if (dirty) {
-      renderer.render(scene, camera);
+      renderScene();
       dirty = false;
       if (!ready) {
         ready = true;
@@ -1374,11 +1719,36 @@ export function createRoomScene(
   resetView();
   resize();
   raf = requestAnimationFrame(frame);
+  function focusItem(id: string) {
+    const item = state.layout.items.find((i) => i.id === id);
+    if (!item) return;
+    if (state.mode === "plan") {
+      plan.position.set(item.position.x, 12, item.position.z + 0.001);
+      plan.lookAt(item.position.x, 0, item.position.z);
+      setPlanZoom(1.6);
+    } else {
+      const distance =
+        Math.max(item.dimensions.width, item.dimensions.depth) * 1.4 + 0.8;
+      controls.target.set(
+        item.position.x,
+        item.dimensions.height * 0.45,
+        item.position.z,
+      );
+      perspective.position.set(
+        item.position.x + distance * 0.7,
+        item.dimensions.height * 0.45 + distance * 0.45,
+        item.position.z + distance,
+      );
+      controls.update();
+    }
+    dirty = true;
+  }
   return {
+    focusItem,
     update,
     resetView,
     capture() {
-      renderer.render(scene, camera);
+      renderScene();
       return renderer.domElement.toDataURL("image/png");
     },
     dispose() {
@@ -1395,7 +1765,13 @@ export function createRoomScene(
       renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
       renderer.domElement.removeEventListener("wheel", onWheel);
       disposeTree(scene);
-      if (authoredAssetRoot) disposeTree(authoredAssetRoot);
+      sourceRoots.forEach(disposeTree);
+      sourceTextures.forEach((t) => t.dispose());
+      surfaces.dispose();
+      environmentTarget?.dispose();
+      pmrem.dispose();
+      composer.passes.forEach((pass) => pass.dispose());
+      composer.dispose();
       glbTemplates.clear();
       renderer.dispose();
       renderer.domElement.remove();
