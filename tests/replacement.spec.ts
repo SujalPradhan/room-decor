@@ -200,7 +200,7 @@ test("renders an imported local GLB, persists its ID across reload and rejects a
   page,
   browser,
 }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(process.env.CI ? 240_000 : 90_000);
   await openRoom(page);
   const baseline = await savedProject(page);
   await startReplacement(page);
