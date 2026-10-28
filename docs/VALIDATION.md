@@ -42,4 +42,6 @@ No native ARCore scanning or reconstruction pipeline has been run. Room and obje
 
 ## Hosting and source
 
-The source is tracked in the private GitHub repository with issues for data/placement, editor, Blender assets and validation/publication. GitHub Actions is configured to run install, unit tests, production build and the browser suite on application changes. Deployment uses a static build and owner-private Sites access. Exact CI and deployment results are recorded at handoff.
+The source is tracked in the private GitHub repository with issues for data/placement, editor, Blender assets and validation/publication. GitHub Actions is configured to run install, unit tests, production build and the browser suite on application changes. Deployment uses a static build and owner-private Sites access. Private deployment succeeded for application source commit `f956d67dcbddea4b43bcf5d5bb84db25224cb2f6`: [Open Roomshift](https://roomshift-studio.dearmacaw4.chatgpt.site).
+
+[GitHub Actions run](https://github.com/SujalPradhan/room-decor/actions/runs/40643984979) **passed** installation, unit tests, the production build and all browser workflows on a clean Linux runner (job duration 2 minutes 44 seconds). The [physical-phone follow-up](https://github.com/SujalPradhan/room-decor/issues/5) remains open until an unlocked device can be checked.
