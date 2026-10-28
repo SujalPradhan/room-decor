@@ -50,6 +50,8 @@ npm run test:e2e
 
 Unit tests cover geometry, doorway movement, default layouts and strict project import. Browser tests exercise the real rendered scene, grouping/dragging, undo/redo, dimensions, visibility, finishes, layout persistence, import/export and touch controls. GitHub Actions runs these checks for pushes and pull requests.
 
+Physical POCO validation is documented in [the device report](docs/POCO_DEVICE_RESULTS.json). The opt-in `node scripts/test-device.mjs` runner attaches to the Roomshift Chrome tab through a forwarded CDP endpoint, exercises touch controls, and restores the prior project.
+
 The asset rebuild validates GLB structure, semantic roots, normalized bounds, grounded pivots and editable materials. See [asset notes](public/assets/ASSETS.md) for the Blender reproduction command. See [validation record](docs/VALIDATION.md) for observed results and limits.
 
 ## Project notes

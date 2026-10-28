@@ -11,7 +11,7 @@
 
 ## Browser editor
 
-All twelve Playwright workflows passed in one uninterrupted final run (59.4 seconds), exercising Chromium with real WebGL rendering. The earlier development-server refresh during formatting was resolved before this run.
+All thirteen Playwright workflows passed against the production preview in one uninterrupted final run (46.3 seconds), exercising Chromium with real WebGL rendering. The earlier development-server refresh during formatting was resolved before this run.
 
 Covered behavior:
 
@@ -36,7 +36,11 @@ Built the nine furniture assets with official Blender Python module `bpy==4.5.15
 
 ## Physical phone status
 
-The connected POCO X5 Pro reports Android 14, gyroscope and accelerometer features, and an installed ARCore package. USB forwarding was configured for the local editor. The phone was asleep and locked when browser verification was attempted, and Chrome remote inspection was unavailable. The user was asked to unlock it; actual device interaction/performance is not yet claimed. Mobile browser emulation passes, but it does not establish on-device frame rate or battery behavior.
+The unlocked POCO X5 Pro was tested with the production build through USB forwarding, using Chrome155 and its actual Qualcomm Adreno642L renderer (392×766 CSS viewport, device pixel ratio2.75). All nine physical-device checks passed: rendering/layout, touch selection/dimensions, rotate/hide/restore, touch drag, two-finger pinch/reset, finishes/save/reload, touch walking/collision, a short animated frame-time sample, and absence of JavaScript errors. The pre-test project was restored afterwards.
+
+The test caught the floating Furniture button overlapping the Forward walking control. The fix removes that duplicate floating shortcut during walking and gives the movement pad44px targets above other controls. A browser regression now checks all four hit targets and held touchscreen movement.
+
+A three-second movement sample measured179 frame intervals at mean16.71ms, median16.7ms and95th percentile16.8ms (approximately59.9Hz). This is a short spot check, not sustained performance or battery validation. [Actual phone screenshot](screenshots/poco-actual.png), [machine-readable device results](POCO_DEVICE_RESULTS.json).
 
 No native ARCore scanning or reconstruction pipeline has been run. Room and object dimensions, opening positions and hidden geometry remain estimated until measured. Local project storage is per browser; references are session-only. These limits are surfaced in the application and README.
 
@@ -44,4 +48,4 @@ No native ARCore scanning or reconstruction pipeline has been run. Room and obje
 
 The source is tracked in the private GitHub repository with issues for data/placement, editor, Blender assets and validation/publication. GitHub Actions is configured to run install, unit tests, production build and the browser suite on application changes. Deployment uses a static build and owner-private Sites access. Private deployment succeeded for application source commit `f956d67dcbddea4b43bcf5d5bb84db25224cb2f6`: [Open Roomshift](https://roomshift-studio.dearmacaw4.chatgpt.site).
 
-[GitHub Actions run](https://github.com/SujalPradhan/room-decor/actions/runs/40643984979) **passed** installation, unit tests, the production build and all browser workflows on a clean Linux runner (job duration 2 minutes 44 seconds). The [physical-phone follow-up](https://github.com/SujalPradhan/room-decor/issues/5) remains open until an unlocked device can be checked.
+[GitHub Actions run](https://github.com/SujalPradhan/room-decor/actions/runs/40643984979) **passed** installation, unit tests, the production build and all browser workflows on a clean Linux runner (job duration 2 minutes 44 seconds). The [physical-phone follow-up](https://github.com/SujalPradhan/room-decor/issues/5) is complete; hardware checks and the corrective regression passed.

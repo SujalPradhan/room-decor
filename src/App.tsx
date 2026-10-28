@@ -633,7 +633,7 @@ export default function App() {
             </button>
           </div>
         </aside>
-        <section className="stage" aria-label="Room design workspace">
+        <section className="stage" data-mode={mode} aria-label="Room design workspace">
           <RoomCanvas
             state={sceneState}
             onSelect={select}

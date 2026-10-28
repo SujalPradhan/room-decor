@@ -2062,6 +2062,9 @@ h2 {
     color: #778d6b;
     margin-left: 6px;
   }
+  .stage[data-mode="walk"] .mobile-furniture-button {
+    display: none;
+  }
   .stage-bottom {
     bottom: 38px;
     left: 16px;

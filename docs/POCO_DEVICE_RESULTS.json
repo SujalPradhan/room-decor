@@ -1,0 +1,118 @@
+{
+  "date": "2026-10-28",
+  "build": "production",
+  "checks": [
+    {
+      "name": "Actual hardware rendering and mobile layout",
+      "passed": true,
+      "durationMs": 48,
+      "detail": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36",
+        "viewport": {
+          "width": 392,
+          "height": 766
+        },
+        "devicePixelRatio": 2.75,
+        "renderer": "ANGLE (Qualcomm, Adreno (TM) 642L, OpenGL ES 3.2)",
+        "vendor": "Google Inc. (Qualcomm)",
+        "hardwareConcurrency": 8,
+        "assetSource": "blender",
+        "drawCalls": 239,
+        "triangles": 24118
+      }
+    },
+    {
+      "name": "Touch furniture selection and dimension edit preserve Original",
+      "passed": true,
+      "durationMs": 1796
+    },
+    {
+      "name": "Touch rotate, hide and restore",
+      "passed": true,
+      "durationMs": 2920
+    },
+    {
+      "name": "Touch plan drag updates saved and rendered furniture",
+      "passed": true,
+      "durationMs": 2219
+    },
+    {
+      "name": "Actual two-finger plan pinch and reset",
+      "passed": true,
+      "durationMs": 1181,
+      "detail": {
+        "pinchZoom": 2.1875
+      }
+    },
+    {
+      "name": "Touch wall finishes and save/reload",
+      "passed": true,
+      "durationMs": 3868
+    },
+    {
+      "name": "Touch walkthrough moves and stops at a furniture obstacle",
+      "passed": true,
+      "durationMs": 6442,
+      "detail": {
+        "before": [
+          1.3,
+          1.6,
+          2.78
+        ],
+        "after": [
+          0.9303909542396102,
+          1.6,
+          -0.48600285702303353
+        ],
+        "stopped": [
+          0.9303909542396102,
+          1.6,
+          -0.48600285702303353
+        ]
+      }
+    },
+    {
+      "name": "Short on-device animated frame-time sample",
+      "passed": true,
+      "durationMs": 3424,
+      "detail": {
+        "durationMs": 3001.7000000029802,
+        "frames": 179,
+        "meanFrameMs": 16.706145251396645,
+        "medianFrameMs": 16.700000000000728,
+        "p95FrameMs": 16.80000000000109,
+        "approximateRafHz": 59.8582129481006,
+        "note": "One short sample during camera movement; not a sustained benchmark."
+      }
+    },
+    {
+      "name": "No JavaScript errors during device interactions",
+      "passed": true,
+      "durationMs": 2
+    }
+  ],
+  "environment": {
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36",
+    "viewport": {
+      "width": 392,
+      "height": 766
+    },
+    "devicePixelRatio": 2.75,
+    "renderer": "ANGLE (Qualcomm, Adreno (TM) 642L, OpenGL ES 3.2)",
+    "vendor": "Google Inc. (Qualcomm)",
+    "hardwareConcurrency": 8,
+    "assetSource": "blender",
+    "drawCalls": 239,
+    "triangles": 24118
+  },
+  "performance": {
+    "durationMs": 3001.7000000029802,
+    "frames": 179,
+    "meanFrameMs": 16.706145251396645,
+    "medianFrameMs": 16.700000000000728,
+    "p95FrameMs": 16.80000000000109,
+    "approximateRafHz": 59.8582129481006,
+    "note": "One short sample during camera movement; not a sustained benchmark."
+  },
+  "errors": []
+}

@@ -1234,7 +1234,7 @@ export function createRoomScene(
   const walkPad = document.createElement("div");
   walkPad.setAttribute("aria-label", "Walk movement controls");
   walkPad.style.cssText =
-    "position:absolute;bottom:70px;left:24px;display:none;grid-template-columns:repeat(3,38px);gap:5px;z-index:3";
+    "position:absolute;bottom:108px;left:20px;display:none;grid-template-columns:repeat(3,44px);gap:5px;z-index:3";
   for (const [label, key, column, row] of [
     ["Forward", "w", "2", "1"],
     ["Left", "a", "1", "2"],
@@ -1247,7 +1247,7 @@ export function createRoomScene(
     button.textContent = (
       { w: "↑", a: "←", s: "↓", d: "→" } as Record<string, string>
     )[key];
-    button.style.cssText = `grid-column:${column};grid-row:${row};width:38px;height:38px;border:1px solid #e8ddc04d;background:#25382be8;color:#e8ddc0;border-radius:8px;font-size:18px;touch-action:none;cursor:pointer`;
+    button.style.cssText = `grid-column:${column};grid-row:${row};width:44px;height:44px;border:1px solid #e8ddc04d;background:#25382be8;color:#e8ddc0;border-radius:8px;font-size:18px;touch-action:none;cursor:pointer`;
     button.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       keys.add(key);

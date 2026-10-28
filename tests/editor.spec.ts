@@ -663,4 +663,71 @@ test.describe("mobile furniture panels", () => {
         .items.find((i) => i.id === "bed")!.dimensions.width,
     ).toBe(1.45);
   });
+
+  test("keeps all walk directions touchable on a short phone viewport and walks with a real held touch", async ({
+    page,
+    context,
+  }) => {
+    await page.setViewportSize({ width: 392, height: 766 });
+    await openRoom(page);
+    await page.getByRole("button", { name: "Walk inside", exact: true }).tap();
+
+    for (const direction of ["forward", "left", "back", "right"]) {
+      const label = `Walk ${direction}`;
+      const button = page.getByRole("button", { name: label, exact: true });
+      await expect(button).toBeVisible();
+      const bounds = (await button.boundingBox())!;
+      const actualTarget = await page.evaluate(
+        ({ x, y }) =>
+          document
+            .elementFromPoint(x, y)
+            ?.closest("button")
+            ?.getAttribute("aria-label"),
+        { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+      );
+      expect(actualTarget, `${label} should receive the touch at its center`).toBe(label);
+    }
+
+    const initial = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __roomshiftScene: { cameraPosition: number[] };
+          }
+        ).__roomshiftScene.cameraPosition,
+    );
+    const forward = (
+      await page.getByRole("button", { name: "Walk forward", exact: true }).boundingBox()
+    )!;
+    const client = await context.newCDPSession(page);
+    try {
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [
+          { x: forward.x + forward.width / 2, y: forward.y + forward.height / 2, id: 1 },
+        ],
+      });
+      await expect
+        .poll(async () => {
+          const position = await page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __roomshiftScene: { cameraPosition: number[] };
+                }
+              ).__roomshiftScene.cameraPosition,
+          );
+          return Math.hypot(position[0] - initial[0], position[2] - initial[2]);
+        })
+        .toBeGreaterThan(0.08);
+    } finally {
+      await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await client.detach();
+    }
+    await expect(page.locator(".inventory-panel.mobile-open")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Walk inside", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
 });
