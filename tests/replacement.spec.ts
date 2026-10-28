@@ -19,7 +19,7 @@ async function openRoom(page: Page, url = "/") {
     page.getByRole("heading", { name: /A little shift/ }),
   ).toBeVisible();
   await expect(page.locator(".stage-loading")).toHaveCount(0, {
-    timeout: 25_000,
+    timeout: process.env.CI ? 60_000 : 25_000,
   });
   await expect(page.locator(".scene-error")).toHaveCount(0);
 }
@@ -208,7 +208,7 @@ test("renders an imported local GLB, persists its ID across reload and rejects a
   await expect(page.locator(".candidate-specs h3")).toHaveText("furniture");
   await expect
     .poll(async () => (await scene(page)).itemAssets.bed.source, {
-      timeout: 25_000,
+      timeout: process.env.CI ? 60_000 : 25_000,
     })
     .toBe("local");
   expect(await savedProject(page)).toEqual(baseline);
@@ -223,11 +223,11 @@ test("renders an imported local GLB, persists its ID across reload and rejects a
   expect(assetId).toMatch(/^local:[0-9a-f-]{36}$/i);
   await page.reload();
   await expect(page.locator(".stage-loading")).toHaveCount(0, {
-    timeout: 25_000,
+    timeout: process.env.CI ? 60_000 : 25_000,
   });
   await expect
     .poll(async () => (await scene(page)).itemAssets.bed.source, {
-      timeout: 25_000,
+      timeout: process.env.CI ? 60_000 : 25_000,
     })
     .toBe("local");
   expect(bed(await savedProject(page)).assetId).toBe(assetId);

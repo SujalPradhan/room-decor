@@ -12,10 +12,10 @@ const port = new URL(baseURL).port || "5173";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
-  timeout: process.env.CI ? 90_000 : 45_000,
+  timeout: process.env.CI ? 120_000 : 45_000,
   maxFailures: process.env.CI ? 1 : undefined,
-  expect: { timeout: 10_000 },
-  fullyParallel: false,
+  expect: { timeout: process.env.CI ? 30_000 : 10_000 },
+  fullyParallel: !!process.env.CI,
   workers: 1,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {

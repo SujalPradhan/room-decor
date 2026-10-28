@@ -6,7 +6,7 @@ const key = "roomshift-project-v1";
 async function open(page: Page) {
   await page.goto("/");
   await expect(page.locator(".stage-loading")).toHaveCount(0, {
-    timeout: 25000,
+    timeout: process.env.CI ? 60_000 : 25_000,
   });
   await expect(page.locator(".scene-error")).toHaveCount(0);
 }

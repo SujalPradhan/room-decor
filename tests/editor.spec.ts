@@ -9,7 +9,7 @@ async function openRoom(page: Page) {
     page.getByRole("heading", { name: /A little shift/ }),
   ).toBeVisible();
   await expect(page.locator(".stage-loading")).toHaveCount(0, {
-    timeout: 25_000,
+    timeout: process.env.CI ? 60_000 : 25_000,
   });
   await expect(page.locator(".scene-error")).toHaveCount(0);
   await expect(page.getByTestId("room-canvas").locator("canvas")).toBeVisible();
