@@ -12,7 +12,8 @@ const port = new URL(baseURL).port || "5173";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
-  timeout: 45_000,
+  timeout: process.env.CI ? 90_000 : 45_000,
+  maxFailures: process.env.CI ? 1 : undefined,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,
@@ -35,7 +36,9 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
   webServer: {
-    command: `npm run dev -- --port ${port}`,
+    command: process.env.CI
+      ? `npm run preview -- --host 127.0.0.1 --port ${port} --strictPort`
+      : `npm run dev -- --port ${port}`,
     url: baseURL,
     reuseExistingServer: true,
     timeout: 60_000,
