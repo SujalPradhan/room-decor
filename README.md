@@ -2,6 +2,8 @@
 
 A local room editor focused on realistic furniture replacement. Phone photos provide appearance/capture input; the laptop provides the main editing workspace. This iteration is developed on `realism-laptop`, preserving the first release on `main`.
 
+Public studio: https://roomshift-studio.dearmacaw4.chatgpt.site
+
 ## Open on the laptop
 
 Double-click **Open Roomshift.command**, or run:
@@ -11,7 +13,7 @@ npm ci
 npm run laptop
 ```
 
-The launcher opens `http://127.0.0.1:5174` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 22.12 or later is required. This realism iteration runs locally.
+The launcher opens `http://127.0.0.1:5174` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 22.12 or later is required. The local launcher runs the same editor on your laptop.
 
 ## Replace a piece
 
@@ -22,7 +24,13 @@ The launcher opens `http://127.0.0.1:5174` and keeps the local server in its ter
 
 The collection contains 14 authored models, including timber/platform/upholstered beds, two wardrobe designs, green/oak desks and chair variants. PBR textures, cloth folds, more faithful silhouettes, natural camera framing, local HDR lighting and contact shading improve the original view. [Asset details](public/assets/REALISTIC_ASSETS.md), [generic surface sources](public/assets/SURFACE_SOURCES.md).
 
-You can still drag, rotate, resize, hide, duplicate and lock furniture; recolor walls; use plan/orbit/walk views; save layout alternatives; and export project JSON or PNG. Editing Original preserves it and creates an alternative. Walkthrough is secondary to furniture editing.
+You can still drag, rotate, resize, hide, delete, duplicate and lock furniture; recolor walls; use plan/orbit/walk views; save layout alternatives; and export project JSON or PNG. Editing Original preserves it and creates an alternative. Walkthrough is secondary to furniture editing.
+
+## Edit dimensions and delete
+
+Select a piece and use **Delete** in its properties, or press Delete/Backspace outside a text field. Locked pieces must be unlocked first. Ctrl/⌘Z restores a deleted piece; Ctrl/⌘Shift+Z or Ctrl/⌘Y redoes the change.
+
+Dimension fields keep your typing until you press Enter, Tab, or click outside. Type the full number (for example, 150), including decimals. Escape cancels; empty or out-of-range entries keep the previous dimension. Each finished dimension edit is one undo step. Resizing a piece marks its measurements as estimated until checked again.
 
 ## Phone photos and imported models
 

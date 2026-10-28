@@ -155,6 +155,9 @@ test("confirms a dimensioned replacement atomically, preserves Original and rest
   await page
     .getByRole("spinbutton", { name: "Replacement width", exact: true })
     .fill("160");
+  await page
+    .getByRole("spinbutton", { name: "Replacement width", exact: true })
+    .press("Tab");
   await expect(checked).not.toBeChecked();
   await checked.check();
   await page

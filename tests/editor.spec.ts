@@ -95,6 +95,9 @@ test("edits a furniture assembly while preserving Original, with rotate undo and
   await page
     .getByRole("spinbutton", { name: "Object width", exact: true })
     .fill("150");
+  await page
+    .getByRole("spinbutton", { name: "Object width", exact: true })
+    .press("Tab");
   await expect(
     page.getByRole("button", { name: "Switch to My layout", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
@@ -318,16 +321,23 @@ test("switches plan, walk and orbit views and displays appropriate movement cont
         .__roomshiftScene.cameraPosition,
   );
   await page.keyboard.down("w");
-  await page.waitForTimeout(300);
-  await page.keyboard.up("w");
-  const after = await page.evaluate(
-    () =>
-      (window as unknown as { __roomshiftScene: { cameraPosition: number[] } })
-        .__roomshiftScene.cameraPosition,
-  );
-  expect(
-    Math.hypot(after[0] - before[0], after[2] - before[2]),
-  ).toBeGreaterThan(0.05);
+  try {
+    await expect
+      .poll(async () => {
+        const after = await page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __roomshiftScene: { cameraPosition: number[] };
+              }
+            ).__roomshiftScene.cameraPosition,
+        );
+        return Math.hypot(after[0] - before[0], after[2] - before[2]);
+      })
+      .toBeGreaterThan(0.05);
+  } finally {
+    await page.keyboard.up("w");
+  }
   await page.getByRole("button", { name: "3D view", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Walk forward", exact: true }),
@@ -377,6 +387,9 @@ test("exports and imports the actual project, and rejects malformed files withou
   await page
     .getByRole("spinbutton", { name: "Object width", exact: true })
     .fill("155");
+  await page
+    .getByRole("spinbutton", { name: "Object width", exact: true })
+    .press("Tab");
   const saved = await savedProject(
     page,
     (p) =>
@@ -394,6 +407,9 @@ test("exports and imports the actual project, and rejects malformed files withou
   await page
     .getByRole("spinbutton", { name: "Object width", exact: true })
     .fill("170");
+  await page
+    .getByRole("spinbutton", { name: "Object width", exact: true })
+    .press("Tab");
   await uploadProject(page, "restored-room.json", data);
   await expect(page.getByRole("status")).toContainText(
     "Project opened successfully",
@@ -469,6 +485,9 @@ test("adds a dimensioned new piece and reports its collision when duplicated int
     .getByRole("spinbutton", { name: "Object width", exact: true })
     .fill("60");
   await page
+    .getByRole("spinbutton", { name: "Object width", exact: true })
+    .press("Tab");
+  await page
     .getByRole("checkbox", {
       name: "I’ve checked these measurements",
       exact: true,
@@ -490,6 +509,9 @@ test("adds a dimensioned new piece and reports its collision when duplicated int
   await page
     .getByRole("spinbutton", { name: "Object width", exact: true })
     .fill("65");
+  await page
+    .getByRole("spinbutton", { name: "Object width", exact: true })
+    .press("Tab");
   await expect(
     page.getByRole("checkbox", {
       name: "I’ve checked these measurements",
@@ -553,6 +575,9 @@ test("rejects changes needing a thirteenth layout without losing saved work or l
   await page
     .getByRole("spinbutton", { name: "Object width", exact: true })
     .fill("160");
+  await page
+    .getByRole("spinbutton", { name: "Object width", exact: true })
+    .press("Tab");
   await expect(page.getByRole("status")).toContainText("12 layouts");
   await expect(
     page.getByRole("spinbutton", { name: "Object width", exact: true }),
@@ -562,6 +587,20 @@ test("rejects changes needing a thirteenth layout without losing saved work or l
   ).toHaveAttribute("aria-pressed", "true");
   expect(await savedProject(page)).toEqual(baseline);
   await page.getByRole("button", { name: "2D plan", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __roomshiftScene: { mode: string } })
+            .__roomshiftScene.mode,
+      ),
+    )
+    .toBe("plan");
+  // Project hit targets only after the new camera has rendered its first frame.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  );
   const start = await page.evaluate(
     () =>
       (
@@ -637,6 +676,9 @@ test.describe("mobile furniture panels", () => {
       .getByRole("spinbutton", { name: "Object width", exact: true })
       .fill("145");
     await page
+      .getByRole("spinbutton", { name: "Object width", exact: true })
+      .press("Tab");
+    await page
       .getByRole("button", { name: "Close properties", exact: true })
       .tap();
     await expect(
@@ -685,7 +727,10 @@ test.describe("mobile furniture panels", () => {
             ?.getAttribute("aria-label"),
         { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
       );
-      expect(actualTarget, `${label} should receive the touch at its center`).toBe(label);
+      expect(
+        actualTarget,
+        `${label} should receive the touch at its center`,
+      ).toBe(label);
     }
 
     const initial = await page.evaluate(
@@ -696,15 +741,19 @@ test.describe("mobile furniture panels", () => {
           }
         ).__roomshiftScene.cameraPosition,
     );
-    const forward = (
-      await page.getByRole("button", { name: "Walk forward", exact: true }).boundingBox()
-    )!;
+    const forward = (await page
+      .getByRole("button", { name: "Walk forward", exact: true })
+      .boundingBox())!;
     const client = await context.newCDPSession(page);
     try {
       await client.send("Input.dispatchTouchEvent", {
         type: "touchStart",
         touchPoints: [
-          { x: forward.x + forward.width / 2, y: forward.y + forward.height / 2, id: 1 },
+          {
+            x: forward.x + forward.width / 2,
+            y: forward.y + forward.height / 2,
+            id: 1,
+          },
         ],
       });
       await expect
@@ -721,13 +770,15 @@ test.describe("mobile furniture panels", () => {
         })
         .toBeGreaterThan(0.08);
     } finally {
-      await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchEnd",
+        touchPoints: [],
+      });
       await client.detach();
     }
     await expect(page.locator(".inventory-panel.mobile-open")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Walk inside", exact: true })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(
+      page.getByRole("button", { name: "Walk inside", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });

@@ -15,6 +15,12 @@ import { ASSET_CATALOG } from "./catalog";
 import { createFurnitureItem } from "./domain";
 import { createReplacementDraft, evaluateReplacement } from "./replacement";
 import { storeLocalModel, removeLocalModel } from "./local-assets";
+import DimensionInput from "./DimensionInput";
+import {
+  DIMENSION_LIMITS,
+  toDisplayUnits,
+  fromDisplayUnits,
+} from "./measurements";
 
 interface Props {
   original: FurnitureItem;
@@ -77,14 +83,16 @@ export default function ReplacementPanel({
     onCompare(true);
     setError("");
   };
-  const dimension = (axis: "width" | "depth" | "height", value: string) => {
-    const cm = Number(value);
-    if (!Number.isFinite(cm) || cm <= 0 || cm > 1000) return;
+  const dimension = (axis: "width" | "depth" | "height", cm: number) => {
     onChange({
       ...candidate,
-      dimensions: { ...candidate.dimensions, [axis]: Math.max(0.05, cm / 100) },
+      dimensions: {
+        ...candidate.dimensions,
+        [axis]: fromDisplayUnits(cm, "cm"),
+      },
       dimensionSource: "estimated",
     });
+    setError("");
     onCompare(true);
   };
   const importModel = async (file?: File) => {
@@ -236,20 +244,25 @@ export default function ReplacementPanel({
               <label key={axis}>
                 <span>{axis}</span>
                 <div>
-                  <input
+                  <DimensionInput
+                    key={`${candidate.assetId ?? candidate.kind}-${axis}`}
                     disabled={loading}
-                    aria-label={`Replacement ${axis}`}
-                    type="number"
-                    min="5"
-                    max="1000"
-                    value={Math.round(candidate.dimensions[axis] * 100)}
-                    onChange={(e) => dimension(axis, e.target.value)}
+                    label={`Replacement ${axis}`}
+                    min={toDisplayUnits(DIMENSION_LIMITS[axis].min, "cm")}
+                    max={toDisplayUnits(DIMENSION_LIMITS[axis].max, "cm")}
+                    unit="cm"
+                    value={toDisplayUnits(candidate.dimensions[axis], "cm")}
+                    onCommit={(value) => dimension(axis, value)}
+                    onInvalidValue={setError}
                   />
                   <small>cm</small>
                 </div>
               </label>
             ))}
           </div>
+          <p className="dimension-entry-help">
+            Enter or click outside to apply · Esc cancels
+          </p>
           <label className="measurement-check">
             <input
               type="checkbox"

@@ -2837,3 +2837,19 @@ h2 {
     max-height: calc(100svh - 265px);
   }
 }
+
+.dimension-entry-help {
+  font-size: 7px;
+  color: #829674;
+  margin-top: 9px;
+  line-height: 1.6;
+}
+.dimension-grid > label > div:has(input[aria-invalid="true"]) {
+  border-color: #d5a171;
+}
+.object-actions .delete-object {
+  color: #ca9d8b;
+}
+.object-actions .delete-object:hover {
+  color: #f0b29c;
+}

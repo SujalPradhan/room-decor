@@ -63,6 +63,12 @@ import { createRoomScene } from "./scene";
 import ReplacementPanel from "./ReplacementPanel";
 import { createReplacementDraft, previewReplacement } from "./replacement";
 import { getLocalModel } from "./local-assets";
+import DimensionInput from "./DimensionInput";
+import {
+  DIMENSION_LIMITS,
+  toDisplayUnits,
+  fromDisplayUnits,
+} from "./measurements";
 
 const STORAGE_KEY = "roomshift-project-v1";
 const kindIcons: Record<ItemKind, LucideIcon> = {
@@ -304,6 +310,22 @@ export default function App() {
       }),
     [editLayout],
   );
+  const deleteSelected = useCallback(() => {
+    if (!selected || replacementDraft || modal) return;
+    if (selected.locked) {
+      notify("Unlock this piece before deleting it.");
+      return;
+    }
+    if (
+      editLayout((l) => {
+        l.items = l.items.filter((item) => item.id !== selected.id);
+      })
+    ) {
+      setSelectedId(null);
+      setMobilePanel(null);
+      notify(`${selected.name} deleted. Ctrl/⌘ Z restores it.`);
+    }
+  }, [selected, replacementDraft, modal, editLayout, notify]);
   const undo = useCallback(() => {
     if (!past.length) return;
     setFuture((f) => [clone(project), ...f]);
@@ -329,11 +351,32 @@ export default function App() {
   }, [snapshot, notify]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.matches("input,textarea,select")) return;
+      if (
+        (e.target as HTMLElement)?.closest(
+          "input,textarea,select,[contenteditable='true']",
+        )
+      )
+        return;
       if (replacementDraft && e.key !== "Escape") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.shiftKey ? redo() : undo();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+      }
+      if (
+        !modal &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.repeat &&
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selected
+      ) {
+        e.preventDefault();
+        deleteSelected();
       }
       if (e.key === "Escape") {
         setReplacementDraft(null);
@@ -347,7 +390,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, redo, selected, editItem, replacementDraft]);
+  }, [undo, redo, selected, editItem, replacementDraft, modal, deleteSelected]);
   useEffect(
     () => () => {
       referencesRef.current.forEach((r) => URL.revokeObjectURL(r.url));
@@ -468,23 +511,16 @@ export default function App() {
     }
     setExportOpen(false);
   };
-  const convert = (m: number) =>
-    project.unit === "cm"
-      ? Math.round(m * 100)
-      : Math.round(m * 39.3701 * 10) / 10;
-  const fromUnit = (n: number) =>
-    project.unit === "cm" ? n / 100 : n / 39.3701;
+  const convert = (m: number) => toDisplayUnits(m, project.unit);
   const changeDimension = (
     axis: "width" | "depth" | "height",
-    value: string,
+    value: number,
   ) => {
-    if (!selected) return;
-    const n = Number(value);
-    if (!Number.isFinite(n) || n <= 0 || n > 2000) return;
-    editItem(selected.id, {
+    if (!selected) return false;
+    return editItem(selected.id, {
       dimensions: {
         ...selected.dimensions,
-        [axis]: Math.min(10, Math.max(0.05, fromUnit(n))),
+        [axis]: fromDisplayUnits(value, project.unit),
       },
       dimensionSource: "estimated",
     });
@@ -977,31 +1013,30 @@ export default function App() {
                         <label key={axis}>
                           <span>{axis}</span>
                           <div>
-                            <input
-                              aria-label={`Object ${axis}`}
-                              type="number"
-                              min="1"
-                              max="2000"
-                              step="1"
+                            <DimensionInput
+                              key={`${selected.id}-${project.unit}-${axis}`}
+                              label={`Object ${axis}`}
+                              min={convert(DIMENSION_LIMITS[axis].min)}
+                              max={convert(DIMENSION_LIMITS[axis].max)}
+                              unit={project.unit}
                               value={convert(selected.dimensions[axis])}
-                              disabled={
-                                selected.locked ||
-                                selected.dimensionSource === "product"
-                              }
-                              onChange={(e) =>
-                                changeDimension(axis, e.target.value)
-                              }
+                              disabled={selected.locked}
+                              onCommit={(value) => changeDimension(axis, value)}
+                              onInvalidValue={notify}
                             />
                             <small>{project.unit}</small>
                           </div>
                         </label>
                       ))}
                     </div>
+                    <p className="dimension-entry-help">
+                      Enter or click outside to apply · Esc cancels
+                    </p>
                     <label className="measurement-check">
                       <input
                         type="checkbox"
                         checked={selected.dimensionSource !== "estimated"}
-                        disabled={selected.dimensionSource === "product"}
+                        disabled={selected.locked}
                         onChange={(e) =>
                           editItem(selected.id, {
                             dimensionSource: e.target.checked
@@ -1140,6 +1175,15 @@ export default function App() {
                         <Eye size={13} />
                       )}{" "}
                       {selected.visible ? "Put aside" : "Bring back"}
+                    </button>
+                    <button
+                      className="delete-object"
+                      aria-label="Delete object"
+                      disabled={selected.locked}
+                      onClick={deleteSelected}
+                    >
+                      <Trash2 size={13} />
+                      Delete
                     </button>
                   </div>
                 </>
