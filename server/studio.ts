@@ -173,7 +173,6 @@ function observedOperation(
     usage: {},
     cost: {
       basis: "local",
-      amountMicros: 0,
       note: "No model API call. Hosting, storage and server processing are unmetered.",
     },
   };

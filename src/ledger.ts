@@ -109,7 +109,10 @@ export function createLocalOperation(input: { roomId: string; roomName?: string;
 
 export function validateOperationRecord(value: unknown): OperationRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Operation must be an object.');
-  const r = value as OperationRecord;
+  const r = structuredClone(value) as OperationRecord;
+  // Version 4 emitted local/no-provider-charge events as a currencyless zero.
+  // Read those existing records without inventing a currency or losing history.
+  if (r.cost?.basis === 'local' && r.cost.amountMicros === 0 && !r.cost.currency) delete r.cost.amountMicros;
   for (const field of ['id', 'roomId', 'name', 'engine', 'submittedAt'] as const) if (typeof r[field] !== 'string' || !r[field].trim() || r[field].length > 500) throw new Error(`Operation ${field} is invalid.`);
   for (const field of ['roomName', 'productId', 'componentId', 'parentId', 'provider', 'model', 'errorCode', 'reusedFrom'] as const) if (r[field] !== undefined && (typeof r[field] !== 'string' || r[field]!.length > 500)) throw new Error(`Operation ${field} is invalid.`);
   if (!['product-lookup', 'room-analysis', 'image-preparation', 'model-generation', 'model-import', 'asset-download', 'render', 'validation'].includes(r.kind)) throw new Error('Operation kind is invalid.');

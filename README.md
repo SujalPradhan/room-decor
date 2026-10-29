@@ -25,6 +25,8 @@ Choose **Add furniture → Try a product link**, or select an existing piece and
 
 The public app works without an account for local editing. Sign in through the account icon for a private online product library and uploads. Room layouts remain device-local. Project exports contain asset IDs; keep your GLB originals. Product drafts and cost history are stored separately from layout undo.
 
+A separate [local link-to-model experiment](docs/RECLINER_EXPERIMENT.md) demonstrates this Flipkart recliner with TripoSR on the M4 Mac, without an API key. It produces an inferred textured GLB; it is not yet a public background generation service.
+
 ## Replace a piece
 
 1. Select furniture in the room or inventory and choose **Try a replacement**.

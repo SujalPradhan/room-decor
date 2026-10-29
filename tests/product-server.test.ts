@@ -464,7 +464,7 @@ describe("bounded retailer retrieval", () => {
         vi.fn().mockResolvedValue(
           new Response("tiny", {
             headers: {
-              "content-length": "2000000",
+              "content-length": "3000001",
               "content-type": "text/html",
             },
           }),

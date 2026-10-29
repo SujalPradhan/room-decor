@@ -1,6 +1,7 @@
 import type { ProductDraft } from "../src/product-types";
 import { applySpecifications, createProductDraft } from "../src/product-domain";
 import { StudioError } from "./types";
+import { flipkartSpecifications } from "./flipkart-state";
 
 export type Fetcher = (
   input: RequestInfo | URL,
@@ -14,7 +15,7 @@ const FLIPKART = new Set([
   "m.flipkart.com",
   "dl.flipkart.com",
 ]);
-const MAX_HTML_BYTES = 1_500_000;
+const MAX_HTML_BYTES = 3_000_000;
 export function normalizeRetailerUrl(raw: string): {
   url: URL;
   retailer: "amazon" | "flipkart";
@@ -173,7 +174,11 @@ export async function fetchRetailerPage(
       const html = new TextDecoder().decode(
         await readBounded(response, MAX_HTML_BYTES),
       );
-      if (/captcha|robot check|validatecaptcha|automated access/i.test(html))
+      // Storefront configuration can contain isReCaptchaEnabled even on a normal
+      // readable product page. Only challenge content is evidence of a block.
+      const visible = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+      if (/captcha|robot check|validatecaptcha|automated access/i.test(visible))
         throw new StudioError(
           422,
           "PAGE_UNAVAILABLE",
@@ -280,6 +285,7 @@ export function extractProductMetadata(
           ? [(rawImages as Record<string, unknown>).url]
           : [];
   imgs.push(meta(html, "og:image"));
+  const imageIds = new Set<string>();
   const images = [
     ...new Set(
       imgs
@@ -292,7 +298,14 @@ export function extractProductMetadata(
         )
         .filter((x): x is string => !!x),
     ),
-  ]
+  ].filter(url => {
+    // Flipkart's OG image is often a small duplicate on a different CDN host.
+    // JSON-LD gallery order comes first and retains the full-size original.
+    const identity = draft.source.retailer === "flipkart" ? new URL(url).pathname.split("/").pop()! : url;
+    if (imageIds.has(identity)) return false;
+    imageIds.add(identity);
+    return true;
+  })
     .slice(0, 6)
     .map((url, i) => ({
       id: `listing-${i}`,
@@ -307,6 +320,11 @@ export function extractProductMetadata(
     selectedImageId: images[0]?.id,
   };
   const propTexts: string[] = [];
+  if (draft.source.retailer === "flipkart") {
+    const details = flipkartSpecifications(html, draft.source.productId);
+    propTexts.push(...details.measurements);
+    next.variant = details.variant;
+  }
   if (structured) {
     for (const axis of ["width", "depth", "height"]) {
       const raw = structured[axis];

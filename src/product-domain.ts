@@ -34,7 +34,7 @@ function inferKind(text: string): ItemKind | null {
   if (/\b(?:floor mattress|floor bed)\b/i.test(text)) return 'floor-bed';
   if (/\bwardrobe|cupboard|almirah\b/i.test(text)) return 'wardrobe';
   if (/\b(?:desk|study table|work table)\b/i.test(text)) return 'desk';
-  if (/\bchair\b/i.test(text)) return 'chair';
+  if (/\b(?:chair|recliner)\b/i.test(text)) return 'chair';
   if (/\b(?:pedestal|standing) fan\b/i.test(text)) return 'pedestal-fan';
   if (/\bstool\b/i.test(text)) return 'stool';
   if (/\b(?:bookshelf|shelf|shelving)\b/i.test(text)) return 'shelf';

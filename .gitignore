@@ -16,3 +16,8 @@ __pycache__/
 .vinext/
 .dev.vars*
 .next/
+.local-3d/
+experiments/**/listing.html
+experiments/**/photo-*.jpg
+experiments/**/current-resolver.json
+experiments/**/output/

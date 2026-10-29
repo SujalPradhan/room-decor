@@ -42,4 +42,4 @@ A public, always-available generator needs a reachable inference worker. A lapto
 - Task persistence, idempotency, account isolation, cancellations/retries and cost/time accounting are tested through the actual UI/backend.
 - Stable editor behavior, Original preservation and one-step undo remain intact.
 
-Status: requirement and implementation gap recorded. End-to-end automatic generation is not implemented or proven by this document. Paid generation stays disabled.
+Status: the hosted automatic pipeline remains incomplete. A separate local, single-command URL-to-GLB prototype has now been demonstrated on the supplied Flipkart recliner using TripoSR on M4 Metal without an API key. See RECLINER_EXPERIMENT.md for timings, quality limitations and reproducible setup. Paid generation stays disabled.
