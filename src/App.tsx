@@ -6,6 +6,9 @@ import {
   BedDouble,
   Box,
   Camera,
+  Clock3,
+  Link2,
+  UserRound,
   Check,
   ChevronDown,
   ChevronRight,
@@ -64,6 +67,13 @@ import ReplacementPanel from "./ReplacementPanel";
 import { createReplacementDraft, previewReplacement } from "./replacement";
 import { getLocalModel } from "./local-assets";
 import DimensionInput from "./DimensionInput";
+import ProductWorkbench from "./ProductWorkbench";
+import CostTimePanel from "./CostTimePanel";
+import ProductPreviewPanel from "./ProductPreviewPanel";
+import { useProductStudio } from "./useProductStudio";
+import { productToFurniture } from "./product-domain";
+import { createLocalOperation } from "./ledger";
+import type { ProductDraft } from "./product-types";
 import {
   DIMENSION_LIMITS,
   toDisplayUnits,
@@ -115,12 +125,13 @@ type Modal = "catalog" | "room" | "references" | "help" | "save" | null;
 function clone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x));
 }
-function initialProject() {
+function initialProject(): Project {
+  const identify = (p: Project): Project => ({ ...p, id: p.id ?? crypto.randomUUID(), name: p.name ?? "My bedroom" });
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return parseProject(saved);
+    if (saved) return identify(parseProject(saved));
   } catch {}
-  return createInitialProject();
+  return identify(createInitialProject());
 }
 function downloadFile(name: string, text: string, type = "application/json") {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -208,6 +219,10 @@ function MiniPlan({ layout, project }: { layout: Layout; project: Project }) {
 }
 
 export default function App() {
+  const [productOpen, setProductOpen] = useState(false), [costOpen, setCostOpen] = useState(false);
+  const [productTarget, setProductTarget] = useState<FurnitureItem | null>(null), [initialProductId, setInitialProductId] = useState<string | undefined>();
+  const [productPreview, setProductPreview] = useState<{ product: ProductDraft; candidate: FurnitureItem; originalId: string | null; layoutId: string } | null>(null);
+  const sceneStarted = useRef(performance.now()), sceneFinished = useRef<number | null>(null), meteredScene = useRef(false);
   const [replacementDraft, setReplacementDraft] =
       useState<FurnitureItem | null>(null),
     [showReplacement, setShowReplacement] = useState(true),
@@ -258,6 +273,27 @@ export default function App() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 4000);
   }, []);
+  const studio = useProductStudio(project.id!, project.name ?? "My bedroom", notify);
+  useEffect(() => {
+    if (!ready || !studio.loaded || meteredScene.current || sceneFinished.current === null) return;
+    meteredScene.current = true;
+    const duration = sceneFinished.current - sceneStarted.current;
+    void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name ?? "My bedroom", kind: "render", name: "Open room scene", engine: "Three.js browser renderer", startedAt: new Date(Date.now() - duration).toISOString(), elapsedMs: duration }));
+  }, [ready, studio.loaded, studio.record, project.id, project.name]);
+  const openProducts = (target: FurnitureItem | null, productId?: string) => {
+    if (target?.locked) { notify("Unlock this piece before trying a product."); return; }
+    setProductTarget(target ? clone(target) : null); setInitialProductId(productId); setProductOpen(true); setCostOpen(false); setModal(null); setExportOpen(false); setMode("orbit"); setMobilePanel(null);
+  };
+  const tryProduct = async (product: ProductDraft) => {
+    try {
+      if (productTarget && (!layout.items.some(i => i.id === productTarget.id) || layout.items.find(i => i.id === productTarget.id)?.locked)) throw new Error("This piece changed. Close the product panel and select it again.");
+      const original = productTarget ? layout.items.find(i => i.id === productTarget.id)! : null;
+      product = await studio.prepareModel(product);
+      const candidate = productToFurniture(product, original);
+      if (!original) candidate.position = { x: 0, z: Math.min(project.room.depth / 2 - candidate.dimensions.depth / 2, 1) };
+      studio.save(product); setProductPreview({ product: clone(product), candidate, originalId: original?.id ?? null, layoutId: layout.id }); setShowReplacement(true); setReplacementDraft(null); setProductOpen(false); setTab("object"); setMobilePanel("properties");
+    } catch (error) { notify(error instanceof Error ? error.message : "This product could not be previewed."); }
+  };
   const commit = useCallback(
     (mutate: (p: Project) => void) => {
       const current = projectRef.current,
@@ -311,7 +347,7 @@ export default function App() {
     [editLayout],
   );
   const deleteSelected = useCallback(() => {
-    if (!selected || replacementDraft || modal) return;
+    if (!selected || replacementDraft || productPreview || productOpen || costOpen || modal) return;
     if (selected.locked) {
       notify("Unlock this piece before deleting it.");
       return;
@@ -325,7 +361,7 @@ export default function App() {
       setMobilePanel(null);
       notify(`${selected.name} deleted. Ctrl/⌘ Z restores it.`);
     }
-  }, [selected, replacementDraft, modal, editLayout, notify]);
+  }, [selected, replacementDraft, productPreview, productOpen, costOpen, modal, editLayout, notify]);
   const undo = useCallback(() => {
     if (!past.length) return;
     setFuture((f) => [clone(project), ...f]);
@@ -357,6 +393,8 @@ export default function App() {
         )
       )
         return;
+      if (productOpen || costOpen) { if (e.key === "Escape") { setProductOpen(false); setCostOpen(false); } return; }
+      if (productPreview) { if (e.key === "Escape") { setProductPreview(null); setMobilePanel(null); } return; }
       if (replacementDraft && e.key !== "Escape") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -390,7 +428,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, redo, selected, editItem, replacementDraft, modal, deleteSelected]);
+  }, [undo, redo, selected, editItem, replacementDraft, productPreview, productOpen, costOpen, modal, deleteSelected]);
   useEffect(
     () => () => {
       referencesRef.current.forEach((r) => URL.revokeObjectURL(r.url));
@@ -401,18 +439,18 @@ export default function App() {
   const sceneState = useMemo<SceneState>(
     () => ({
       room: project.room,
-      layout:
-        replacementDraft && showReplacement
-          ? previewReplacement(layout, replacementDraft)
-          : layout,
-      ghostItem: replacementDraft && showReplacement ? selected : null,
-      selectedId,
+      layout: productPreview && productPreview.layoutId === layout.id && showReplacement
+        ? { ...layout, items: productPreview.originalId ? layout.items.map(i => i.id === productPreview.originalId ? productPreview.candidate : i) : [...layout.items, productPreview.candidate] }
+        : replacementDraft && showReplacement ? previewReplacement(layout, replacementDraft) : layout,
+      ghostItem: productPreview && showReplacement ? layout.items.find(i => i.id === productPreview.originalId) ?? null : replacementDraft && showReplacement ? selected : null,
+      selectedId: productPreview ? productPreview.candidate.id : selectedId,
       mode,
       wallsVisible,
       showClearances,
     }),
     [
       project.room,
+      productPreview,
       layout,
       selectedId,
       mode,
@@ -424,7 +462,7 @@ export default function App() {
     ],
   );
   const select = (id: string | null) => {
-    if (replacementDraft) return;
+    if (replacementDraft || productPreview || productOpen || costOpen) return;
     setSelectedId(id);
     if (id) {
       setTab("object");
@@ -432,6 +470,8 @@ export default function App() {
     }
   };
   const onMove = (id: string, position: Position) => {
+    if (productPreview && id === productPreview.candidate.id) { setProductPreview(old => old ? { ...old, candidate: { ...old.candidate, position: { x: Math.round(position.x * 100) / 100, z: Math.round(position.z * 100) / 100 } } } : old); return true; }
+    if (productOpen || costOpen) return false;
     const item = layout.items.find((i) => i.id === id);
     if (!item || item.locked || replacementDraft) return false;
     return editItem(id, {
@@ -477,10 +517,11 @@ export default function App() {
       return;
     }
     try {
-      const next = parseProject(await file.text());
+      const parsed = parseProject(await file.text());
+      const next = { ...parsed, id: parsed.id ?? crypto.randomUUID(), name: parsed.name ?? (file.name.replace(/\.json$/i, "").slice(0, 80) || "My room") };
       commit((p) => Object.assign(p, next));
       setSelectedId(null);
-      setReplacementDraft(null);
+      setReplacementDraft(null); setProductPreview(null); setProductOpen(false);
       notify(
         "Project opened successfully. Imported GLB files are stored separately in this browser.",
       );
@@ -494,6 +535,7 @@ export default function App() {
     if (fileInput.current) fileInput.current.value = "";
   };
   const capture = () => {
+    const startedAt = new Date().toISOString(), started = performance.now();
     try {
       const url = controller.current?.capture();
       if (!url) {
@@ -506,6 +548,7 @@ export default function App() {
         "roomshift-" + layout.name.toLowerCase().replaceAll(" ", "-") + ".png";
       a.click();
       notify("Room image downloaded.");
+      void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name, kind: "render", name: "Export room image", engine: "Three.js PNG export", startedAt, elapsedMs: performance.now() - started }));
     } catch {
       notify("The room image could not be exported.");
     }
@@ -554,10 +597,12 @@ export default function App() {
         </a>
         <div className="breadcrumb">
           My spaces <ChevronRight size={12} />
-          <span>My bedroom</span>
+          <span>{project.name ?? "My bedroom"}</span>
           <span className="project-count">01</span>
         </div>
         <div className="header-actions">
+          <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>
+          <a className="icon-button subtle studio-account" aria-label={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} title={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} href={studio.session?.user ? "/signout-with-chatgpt?return_to=/" : "/signin-with-chatgpt?return_to=/"} target="_top"><UserRound size={16}/></a>
           <span className="save-status">
             <i />
             {saved ? "Saved on this device" : "Saving…"}
@@ -721,7 +766,7 @@ export default function App() {
             onSelect={select}
             onMove={onMove}
             onController={(c) => (controller.current = c)}
-            onReady={() => setReady(true)}
+            onReady={() => { sceneFinished.current ??= performance.now(); setReady(true); }}
             onError={setSceneError}
           />
           <div className="stage-heading">
@@ -740,7 +785,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Undo"
-                disabled={!past.length || !!replacementDraft}
+                disabled={!past.length || !!replacementDraft || !!productPreview || productOpen || costOpen}
                 onClick={undo}
               >
                 <Undo2 size={16} />
@@ -748,7 +793,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Redo"
-                disabled={!future.length || !!replacementDraft}
+                disabled={!future.length || !!replacementDraft || !!productPreview || productOpen || costOpen}
                 onClick={redo}
               >
                 <Redo2 size={16} />
@@ -861,9 +906,17 @@ export default function App() {
         <aside
           className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""}`}
         >
-          {replacementDraft && selected ? (
+          {productPreview && productPreview.layoutId === layout.id ? (
+            <ProductPreviewPanel product={productPreview.product} candidate={productPreview.candidate} original={layout.items.find(i => i.id === productPreview.originalId) ?? null} layout={layout} room={project.room} showAfter={showReplacement} onCompare={setShowReplacement} onFocus={() => controller.current?.focusItem?.(productPreview.candidate.id)} onBack={() => { const preview = productPreview; setProductPreview(null); openProducts(layout.items.find(i => i.id === preview.originalId) ?? null, preview.product.id); }} onConfirm={() => {
+              const preview = productPreview;
+              if (preview.layoutId !== layout.id || (preview.originalId && (!layout.items.some(i => i.id === preview.originalId) || layout.items.find(i => i.id === preview.originalId)?.locked))) { notify("The layout changed. Review this product again before using it."); return; }
+              const accepted = editLayout(l => { if (preview.originalId) l.items = l.items.map(i => i.id === preview.originalId ? clone(preview.candidate) : i); else l.items.push(clone(preview.candidate)); });
+              if (accepted) { setSelectedId(preview.candidate.id); setProductPreview(null); setTab("object"); notify("Product saved. Undo restores the previous room layout."); }
+            }} />
+          ) : replacementDraft && selected ? (
             <ReplacementPanel
               original={selected}
+              onProductLink={() => openProducts(selected)}
               candidate={replacementDraft}
               layout={layout}
               room={project.room}
@@ -979,6 +1032,7 @@ export default function App() {
                     >
                       Try a replacement <ArrowUpRight size={14} />
                     </button>
+                    <button className="focus-piece product-link-entry" onClick={() => openProducts(selected)}><Link2 size={13}/>Have a product link?</button>
                     <button
                       className="focus-piece"
                       onClick={() =>
@@ -1343,6 +1397,7 @@ export default function App() {
               aria-label={`Switch to ${l.name}`}
               aria-pressed={l.id === layout.id}
               onClick={() => {
+                setProductPreview(null); setReplacementDraft(null);
                 setProject((p) => ({ ...p, activeLayoutId: l.id }));
                 setSelectedId(null);
                 setMobilePanel(null);
@@ -1465,6 +1520,8 @@ export default function App() {
           </button>
         </div>
       )}
+      {productOpen && <ProductWorkbench storageNote={studio.storageNote} original={productTarget} initialProductId={initialProductId} roomId={project.id!} roomName={project.name ?? "My bedroom"} products={studio.products} session={studio.session} onResolve={studio.resolve} onSave={studio.save} onTry={tryProduct} onClose={() => setProductOpen(false)} onImportModel={studio.importModel} onAddImage={studio.addImage} onGenerate={studio.generate}/>}
+      {costOpen && <CostTimePanel storageNote={studio.storageNote} operations={studio.operations} products={studio.products} roomId={project.id!} roomName={project.name ?? "My bedroom"} onClose={() => setCostOpen(false)}/>}
       {modal && (
         <div
           className="modal-backdrop"
@@ -1500,6 +1557,7 @@ export default function App() {
                 <span className="eyebrow">MAKE SPACE FOR SOMETHING NEW</span>
                 <h2>A new possibility.</h2>
                 <p>Start with a piece, then give it the dimensions you need.</p>
+                <button className="product-catalog-entry" onClick={() => openProducts(null)}><Link2 size={23}/><span><strong>Try a product link</strong><small>Amazon, Flipkart, or your own specifications and 3D model</small></span><ArrowUpRight size={20}/></button>
                 <div className="catalog-grid">
                   {(Object.keys(kindNames) as ItemKind[]).map((kind) => {
                     const Icon = kindIcons[kind];

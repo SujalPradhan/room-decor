@@ -13,7 +13,17 @@ npm ci
 npm run laptop
 ```
 
-The launcher opens `http://127.0.0.1:5174` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 22.12 or later is required. The local launcher runs the same editor on your laptop.
+The launcher opens `http://127.0.0.1:5176` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 24 (or 22.13 or later) is required. The local launcher runs the same editor on your laptop.
+
+## Product links and processing history
+
+Choose **Add furniture → Try a product link**, or select an existing piece and choose **Have a product link?** Paste an Amazon India or Flipkart link, or paste specifications when the page cannot be read. Review the category, variant and three outer dimensions. Unknown measurements remain blank; check all three before trying the size. The preview uses approximate furniture geometry unless you import a detailed GLB. Confirm to make one undoable layout change. **My products** keeps drafts for later.
+
+**Cost & time** records newly instrumented work, elapsed/stage time, engine/provider/model, credit usage and cost basis, with filters and CSV export. Existing assets have no reconstructed billing history. Browser work is stored on this device; signed-in server lookups/uploads are stored in your account. Local work means no external inference charge; hosting and device resource costs are not metered.
+
+**Paid generation is disabled**, including at the server. No API key is required for the available workflows. The provider adapter is mock-tested; no live generation or provider billing has been validated.
+
+The public app works without an account for local editing. Sign in through the account icon for a private online product library and uploads. Room layouts remain device-local. Project exports contain asset IDs; keep your GLB originals. Product drafts and cost history are stored separately from layout undo.
 
 ## Replace a piece
 
@@ -58,7 +68,7 @@ npm run test:e2e
 For the development server on 5174:
 
 ```sh
-ROOMSHIFT_BASE_URL=http://127.0.0.1:5174 npm run test:e2e
+ROOMSHIFT_BASE_URL=http://127.0.0.1:5176 npm run test:e2e
 ```
 
 The Blender rebuild validates 14 roots, portable maps, UVs, normalized bounds and floor pivots. The local editable source is retained under ignored `artifacts/furniture-realistic.blend`; the build script recreates it. [Laptop validation](docs/LAPTOP_VALIDATION.md), [first-release and POCO validation](docs/VALIDATION.md).

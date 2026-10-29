@@ -451,6 +451,7 @@ function parseItem(value: unknown): FurnitureItem {
   if(i.assetId!==undefined&&!isSupportedAssetId(i.assetId))fail('Unknown or invalid furniture asset ID.');
   return {
     ...(i.assetId===undefined?{}:{assetId:i.assetId as string}),
+    ...(i.productId === undefined ? {} : { productId: string(i.productId, "Product ID") }),
     id: string(i.id, "Furniture ID"),
     name: string(i.name, "Furniture name"),
     kind: i.kind as ItemKind,
@@ -531,7 +532,7 @@ export function parseProject(text: string): Project {
   if (!layouts.some((l) => l.id === activeLayoutId))
     fail("The active layout does not exist.");
   if (p.unit !== "cm" && p.unit !== "in") fail("Use centimetres or inches.");
-  return { version: 1, room, layouts, activeLayoutId, unit: p.unit };
+  return { version: 1, ...(p.id === undefined ? {} : { id: string(p.id, "Room ID") }), ...(p.name === undefined ? {} : { name: string(p.name, "Room name") }), room, layouts, activeLayoutId, unit: p.unit };
 }
 export function serializeProject(project: Project): string {
   return JSON.stringify(parseProject(JSON.stringify(project)), null, 2);

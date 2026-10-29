@@ -31,7 +31,7 @@ export default defineConfig({
         ? { executablePath: installedChrome }
         : {}),
       args: [
-        "--use-angle=swiftshader",
+        process.env.ROOMSHIFT_NATIVE_GPU ? "--use-angle=metal" : "--use-angle=swiftshader",
         "--enable-webgl",
         "--enable-unsafe-swiftshader",
       ],

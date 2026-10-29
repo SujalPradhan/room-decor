@@ -19,6 +19,7 @@ export interface Position {
   z: number;
 }
 export interface FurnitureItem {
+  productId?: string;
   assetId?: string;
   id: string;
   name: string;
@@ -46,6 +47,8 @@ export interface Layout {
   accentColor: string;
 }
 export interface Project {
+  id?: string;
+  name?: string;
   version: 1;
   room: RoomSpec;
   layouts: Layout[];

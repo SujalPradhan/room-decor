@@ -10,3 +10,9 @@ artifacts/
 
 __pycache__/
 *.pyc
+
+.sites-runtime/
+.wrangler/
+.vinext/
+.dev.vars*
+.next/
