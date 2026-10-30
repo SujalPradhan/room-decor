@@ -1,10 +1,11 @@
 #!/bin/zsh
 set -e
 cd "$(dirname "$0")"
-if test -f "$HOME/.nvm/nvm.sh"; then
-  source "$HOME/.nvm/nvm.sh"
-  nvm use 24 >/dev/null
+roomshift_node="$HOME/.nvm/versions/node/v24.19.0/bin/node"
+if ! test -x "$roomshift_node"; then
+  echo 'Roomshift needs Node 24. Install it before enabling the automatic generator.'
+  exit 1
 fi
+"$roomshift_node" "$PWD/scripts/install-generator-service.mjs" install --node "$roomshift_node"
 open 'https://roomshift-studio.dearmacaw4.chatgpt.site'
-echo 'Keep this window open while creating models. This pilot stops after 3 jobs or one idle hour.'
-exec node --env-file=../.env scripts/local-pipeline-worker.mjs --max-jobs 3 --idle-seconds 3600
+echo 'The generator will start automatically when you log in. You can close this window.'

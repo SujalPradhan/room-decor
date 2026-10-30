@@ -121,7 +121,7 @@ async function complete(request: Request, env: StudioEnv, row: Row) {
   const operations = operationsFor(data.operations, row), bytes = await file.arrayBuffer();
   try { validateGLB(bytes); } catch { return problem(400, 'INVALID_GLB', 'The generated file must be a self-contained GLB 2 model.'); }
   const assetId = crypto.randomUUID(), key = `studio/${row.owner_id}/${assetId}`, timestamp = now();
-  product.model = { state: 'ready', appearance: 'ai-generated', remoteAssetId: assetId, draftRevision: product.revision };
+  product.model = { state: 'ready', appearance: 'ai-generated', remoteAssetId: assetId, draftRevision: product.revision, ...(product.model.placementDimensions ? {placementDimensions:product.model.placementDimensions} : {}), ...(product.model.scaleSource ? {scaleSource:product.model.scaleSource} : {}) };
   const result = JSON.stringify({ product, assetId, url: `/api/assets/${assetId}`, warnings });
   await env.BUCKET!.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
   try {

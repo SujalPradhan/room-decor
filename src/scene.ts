@@ -861,7 +861,16 @@ export function createRoomScene(
     const key = item.assetId?.startsWith("local:")
       ? item.assetId
       : item.assetId?.replace(/^builtin:/, "") || item.kind;
-    if (key.startsWith("local:")) ensureLocalTemplate(key);
+    if (key.startsWith("local:")) {
+      ensureLocalTemplate(key);
+      if (!glbTemplates.has(key)) {
+        const pending = new THREE.Group();
+        pending.userData.assetId = item.assetId;
+        const outline = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(item.dimensions.width,item.dimensions.height,item.dimensions.depth)),new THREE.LineBasicMaterial({color:0xdcc18c,transparent:true,opacity:.3}));
+        outline.position.y=item.dimensions.height/2;pending.add(outline);
+        return pending;
+      }
+    }
     const template = glbTemplates.get(key) || glbTemplates.get(item.kind);
     if (!template) return buildFurniture(item);
     const root = new THREE.Group(),

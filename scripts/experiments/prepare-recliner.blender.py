@@ -25,7 +25,15 @@ back=top-seat;heading=math.pi/2-math.atan2(float(back[1]),float(back[0])) if pro
 obj.rotation_euler=(0,0,heading)
 bpy.ops.object.transform_apply(location=False,rotation=True,scale=True)
 raw_size=list(obj.dimensions)
-want=[product['dimensions'][a]['metres'] for a in ['width','depth','height']];assert all(v and v>0 for v in want)
+axes=['width','depth','height'];known=[product['dimensions'][a]['metres'] for a in axes]
+ratios=[v/max(float(d),1e-6) for v,d in zip(known,raw_size) if isinstance(v,(int,float)) and math.isfinite(v) and v>0]
+uniform=float(np.median(ratios)) if ratios else 1.0/max(raw_size)
+limits=[(.05,20),(.05,20),(.02,10)]
+want=[v if isinstance(v,(int,float)) and math.isfinite(v) and v>0 else min(hi,max(lo,float(d)*uniform)) for v,d,(lo,hi) in zip(known,raw_size,limits)]
+estimated=any(v is None for v in known)
+product['model']={**product['model'],'placementDimensions':dict(zip(axes,want)),'scaleSource':'estimated' if estimated else 'listing'}
+if estimated:product['specificationWarnings']=list(dict.fromkeys([*product.get('specificationWarnings',[]),'Some outer measurements are unavailable. Display scale is estimated from inferred geometry; fit is unverified.']))
+(root/'product.json').write_text(json.dumps(product,indent=2))
 obj.scale=[v/max(float(d),1e-6) for v,d in zip(want,obj.dimensions)];bpy.ops.object.transform_apply(location=False,rotation=False,scale=True)
 bounds=[obj.matrix_world@Vector(c) for c in obj.bound_box];minimum=Vector([min(v[a] for v in bounds) for a in range(3)]);maximum=Vector([max(v[a] for v in bounds) for a in range(3)])
 obj.location-=Vector(((minimum.x+maximum.x)/2,(minimum.y+maximum.y)/2,minimum.z));bpy.ops.object.transform_apply(location=True,rotation=False,scale=False)
@@ -54,7 +62,7 @@ stretch=max(w/d for w,d in zip(want,raw_size))/min(w/d for w,d in zip(want,raw_s
 warnings=['Listing-axis scaling changes inferred proportions substantially; verify appearance and fit.'] if stretch>1.2 else []
 obj['roomshift_inference']=json.dumps({'model':'stabilityai/TripoSR','source':product['source'],'listingDimensionsMetres':dict(zip(['width','depth','height'],want)),'geometryWarnings':warnings,'hiddenGeometry':'inferred, not measured'})
 model=root/'snuzspace-recliner-experimental.glb';bpy.ops.export_scene.gltf(filepath=str(model),export_format='GLB',use_selection=True,export_yup=True,export_animations=False,export_extras=True)
-(root/'conversion-report.json').write_text(json.dumps({'rawOrientedBoundsMetres':raw_size,'targetListingDimensionsMetres':dict(zip(['width','depth','height'],want)),'blenderDimensionsMetres':list(obj.dimensions),'axisScalingRatio':stretch,'geometryWarnings':warnings,'faces':len(obj.data.polygons),'textureSize':1024,'colorSpace':'TripoSR sRGB converted to linear vertex colors before texture baking','fileBytes':model.stat().st_size,'conversionSeconds':time.monotonic()-start,'orientation':'TSR Z-up corrected; chair front estimated from upper-back versus seat centroids; visual validation required','inferredYawDegrees':math.degrees(heading),'note':'Dimensions follow retailer table. Hidden surfaces and colors are inferred.'},indent=2))
+(root/'conversion-report.json').write_text(json.dumps({'rawOrientedBoundsMetres':raw_size,'targetListingDimensionsMetres':dict(zip(['width','depth','height'],want)),'blenderDimensionsMetres':list(obj.dimensions),'axisScalingRatio':stretch,'geometryWarnings':warnings,'faces':len(obj.data.polygons),'textureSize':1024,'colorSpace':'TripoSR sRGB converted to linear vertex colors before texture baking','fileBytes':model.stat().st_size,'conversionSeconds':time.monotonic()-start,'orientation':'TSR Z-up corrected; chair front estimated from upper-back versus seat centroids; visual validation required','inferredYawDegrees':math.degrees(heading),'scaleSource':'estimated' if estimated else 'listing','note':'Known sizes follow retailer evidence; missing sizes use an estimated display scale. Hidden surfaces and colors are inferred.'},indent=2))
 # Save a reproducible turntable view, separate from the exported product asset.
 obj.select_set(False)
 bpy.ops.mesh.primitive_plane_add(size=200,location=(0,0,-.008));plane=bpy.context.object;floor=bpy.data.materials.new('Preview floor');floor.diffuse_color=(.52,.55,.49,1);plane.data.materials.append(floor)

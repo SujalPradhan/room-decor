@@ -14,7 +14,9 @@ const maxJobs = Number(option('--max-jobs', '1'));
 const idleSeconds = Number(option('--idle-seconds', '300'));
 if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > 6 || !Number.isInteger(idleSeconds) || idleSeconds < 1 || idleSeconds > 3600)
   throw Error('Use --max-jobs 1..6 and --idle-seconds 1..3600.');
-const base = new URL(process.env.ROOMSHIFT_SITE_URL ?? 'https://invalid.local');
+let base;
+try { base = new URL(process.env.ROOMSHIFT_SITE_URL ?? 'https://invalid.local'); }
+catch { console.error('Configure ROOMSHIFT_SITE_URL with a valid site origin.'); process.exit(1); }
 const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
 if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback)) || base.username || base.password || base.pathname !== '/' || base.search || base.hash || base.hostname === 'invalid.local')
   throw Error('Set ROOMSHIFT_SITE_URL to an HTTPS site origin (HTTP is allowed only on literal loopback hosts).');
@@ -104,6 +106,12 @@ async function runJob(claim) {
     try { await api(`jobs/${job.id}/usage`, { operations: [...operations, interrupted] }, leaseToken); }
     catch { console.log('Interrupted usage report could not be delivered; local reports are retained.'); }
   }
+  // Keep this Mac awake only during an actual job; idle polling never prevents sleep.
+  let awake = null;
+  if (process.platform === 'darwin') {
+    awake = spawn('/usr/bin/caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' });
+    awake.once('error', () => {});
+  }
   let line = '';
   const jobTimeout = setTimeout(() => { stopChild(); }, 15 * 60_000);
   jobTimeout.unref();
@@ -162,7 +170,7 @@ async function runJob(claim) {
       catch { console.log('Failure report could not be delivered; the lease will expire safely.'); }
       console.log(`Job ${job.id} did not complete. No model was applied.`);
     }
-  } finally { clearTimeout(jobTimeout); active = null; child = null; }
+  } finally { clearTimeout(jobTimeout); awake?.kill('SIGTERM'); active = null; child = null; }
 }
 const lockPath = resolve(root, 'artifacts', 'local-worker.lock');
 const lock = { pid: process.pid, nonce: crypto.randomUUID(), startedAt: new Date().toISOString() };

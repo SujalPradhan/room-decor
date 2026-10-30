@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyGenerationResult, applySpecifications, canTryProduct, createProductDraft, getProductReviewIssues, isSafeProductImageUrl, parseProductSpecifications, productToFurniture, updateProductDraft, validateProductDraft } from '../src/product-domain';
+import { applyGenerationResult, applySpecifications, canTryProduct, createProductDraft, generatedProductToFurniture, getProductReviewIssues, isSafeProductImageUrl, parseProductSpecifications, productToFurniture, updateProductDraft, validateProductDraft } from '../src/product-domain';
 import { createFurnitureItem } from '../src/domain';
 import type { GenerationJob, ProductDraft } from '../src/product-types';
 
@@ -75,7 +75,7 @@ describe('review and model identity', () => {
     const otherVariant = updateProductDraft(resized, { variant: 'Different timber and size' });
     expect(otherVariant.model.localAssetId).toBeUndefined();
   });
-  it('invalidates a previous generated model after size, image or variant changes and refuses stale completions', () => {
+  it('invalidates a previous generated model after variant changes and refuses stale completions', () => {
     const draft = reviewed();
     draft.model = { state: 'ready', appearance: 'ai-generated', draftRevision: draft.revision, localAssetId: 'local:old' };
     const updated = updateProductDraft(draft, { variant: '180 cm wide' });
@@ -97,5 +97,75 @@ describe('review and model identity', () => {
     expect(isSafeProductImageUrl('//evil.test/image.jpg')).toBe(false);
     expect(isSafeProductImageUrl('/api/assets/asset_1')).toBe(true);
     expect(isSafeProductImageUrl('https://images.example/photo.jpg')).toBe(true);
+  });
+});
+
+describe('automatic generated-model placement', () => {
+  const localAssetId = 'local:11111111-1111-4111-8111-111111111111';
+  function generated(): ProductDraft {
+    const draft = reviewed();
+    draft.model = { state: 'ready', appearance: 'ai-generated', localAssetId, draftRevision: draft.revision, placementDimensions: { width: 1.5025, depth: .6, height: .75 }, scaleSource: 'listing' };
+    return draft;
+  }
+  it('places the actual generated geometry with unconfirmed or conflicting evidence, without changing facts', () => {
+    const draft = generated();
+    draft.dimensions.width.confirmed = false;
+    draft.specificationWarnings = ['Width diagram conflicts with the table.'];
+    const before = structuredClone(draft), original = createFurnitureItem('bed');
+    const item = generatedProductToFurniture(draft, original);
+    expect(item).toMatchObject({ id: original.id, assetId: localAssetId, productId: draft.id, dimensionSource: 'estimated', dimensions: { width: 1.5025, depth: .6, height: .75 } });
+    expect(draft).toEqual(before);
+    expect(original.kind).toBe('bed');
+    expect(canTryProduct(draft)).toBe(false);
+  });
+  it('uses separately recorded model bounds for missing sizes and metadata without inventing product evidence', () => {
+    const draft = createProductDraft('room-1');
+    draft.model = { state: 'ready', appearance: 'ai-generated', localAssetId, draftRevision: draft.revision, placementDimensions: { width: .7, depth: .8, height: 1 }, scaleSource: 'estimated' };
+    const item = generatedProductToFurniture(draft);
+    expect(item).toMatchObject({ name: 'Product', assetId: localAssetId, dimensions: { width: .7, depth: .8, height: 1 }, dimensionSource: 'estimated' });
+    for (const axis of ['width', 'depth', 'height'] as const) expect(draft.dimensions[axis]).toEqual({ metres: null, origin: 'unknown', confirmed: false });
+    expect(draft.kind).toBeNull();
+    expect(draft.title).toBe('');
+  });
+  it('refuses proxy, stale, missing and malformed local models instead of silently choosing a stock asset', () => {
+    const draft = generated();
+    for (const model of [
+      { ...draft.model, state: 'proxy' as const },
+      { ...draft.model, draftRevision: draft.revision + 1 },
+      { ...draft.model, localAssetId: undefined, remoteAssetId: 'private-model' },
+      { ...draft.model, localAssetId: 'local:bad' },
+      { ...draft.model, appearance: 'size-preview' as const },
+    ]) expect(() => generatedProductToFurniture({ ...draft, model })).toThrow(/not ready/);
+    draft.dimensions.depth.metres = null;
+    draft.dimensions.depth.confirmed = false;
+    delete draft.model.placementDimensions;
+    expect(() => generatedProductToFurniture(draft)).toThrow(/no usable placement size/);
+  });
+  it('preserves ready geometry when category or size changes and keeps uncertainty explicit', () => {
+    const draft = generated();
+    const category = updateProductDraft(draft, { kind: 'wardrobe' });
+    expect(category.revision).toBe(draft.revision + 1);
+    expect(category.model).toMatchObject({ state: 'ready', localAssetId, draftRevision: category.revision });
+    const resized = updateProductDraft(category, { dimensions: { ...category.dimensions, width: { metres: 1.7, origin: 'user', confirmed: false } } });
+    expect(resized.model).toMatchObject({ state: 'ready', localAssetId, draftRevision: resized.revision, scaleSource: 'estimated' });
+    expect(generatedProductToFurniture(resized)).toMatchObject({ kind: 'wardrobe', dimensions: { width: 1.7 }, dimensionSource: 'estimated' });
+  });
+  it('invalidates ready geometry after source, variant or reference changes', () => {
+    const draft = generated();
+    draft.source = { retailer: 'flipkart', canonicalUrl: 'https://www.flipkart.com/first/p/itmfirst', submittedUrl: 'https://www.flipkart.com/first/p/itmfirst' };
+    for (const patch of [
+      { source: { ...draft.source, submittedUrl: 'https://www.flipkart.com/other/p/itmother' } },
+      { source: { ...draft.source, canonicalUrl: 'https://www.flipkart.com/other/p/itmother' } },
+      { variant: 'Other fabric' },
+      { images: [{ id: 'another-photo', source: 'listing' as const, url: 'https://example.com/product.jpg', generationAllowed: false }], selectedImageId: 'another-photo' },
+    ]) expect(updateProductDraft(draft, patch).model).toMatchObject({ state: 'proxy', appearance: 'size-preview' });
+  });
+  it('round-trips model scale metadata and rejects malformed bounds or scale provenance', () => {
+    const draft = generated();
+    expect(validateProductDraft(draft)).toEqual(draft);
+    expect(generatedProductToFurniture(draft).dimensionSource).toBe('product');
+    for (const placementDimensions of [{ width: NaN, depth: .6, height: .75 }, { width: 21, depth: .6, height: .75 }, { width: .7, depth: .6 }])
+      expect(() => validateProductDraft({ ...draft, model: { ...draft.model, placementDimensions } })).toThrow(/placement/);
+    expect(() => validateProductDraft({ ...draft, model: { ...draft.model, scaleSource: 'verified' } })).toThrow(/scale source/);
   });
 });

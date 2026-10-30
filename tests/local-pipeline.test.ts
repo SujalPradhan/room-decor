@@ -270,13 +270,13 @@ describe('bounded outgoing local model pilot', () => {
     const progress = await f.worker(`jobs/${job.id}/progress`, { stage: 'reconstructing', operations: [operation] }, claim.leaseToken);
     expect(progress.status).toBe(200);
     expect((await (await f.call('/api/operations')).json()).operations).toHaveLength(1);
-    const response = await f.worker(`jobs/${job.id}/complete`, resultForm({ ...p, revision: p.revision + 1 }, [operation]), claim.leaseToken);
+    const response = await f.worker(`jobs/${job.id}/complete`, resultForm({ ...p, revision: p.revision + 1,dimensions:{...p.dimensions,width:{metres:null,origin:'unknown',confirmed:false}},model:{...p.model,placementDimensions:{width:.8,depth:.9,height:1.1},scaleSource:'estimated'} }, [operation]), claim.leaseToken);
     expect(response.status).toBe(200);
     const completed = (await response.json()).job;
     expect(completed.status).toBe('succeeded'); expect(completed.result.product.id).toBe(p.id);
     expect(completed.result.product.revision).toBe(p.revision + 1);
     expect(completed.result.product.model.draftRevision).toBe(p.revision + 1);
-    expect(completed.requestedRevision).toBe(p.revision);
+    expect(completed.requestedRevision).toBe(p.revision);expect(completed.result.product.model.placementDimensions).toEqual({width:.8,depth:.9,height:1.1});expect(completed.result.product.model.scaleSource).toBe('estimated');expect(completed.result.product.dimensions.width.metres).toBeNull();
     expect(completed.result.product.dimensions.width.confirmed).toBe(false);
     expect(completed.operations[0]).toMatchObject({ id: `${job.id}-0`, roomId: p.roomId, productId: p.id, usage: { inputTokens: 100 } });
     expect(f.bucket.files.size).toBe(1);

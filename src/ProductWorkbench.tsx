@@ -2,14 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Check,
-  CheckCircle2,
   ChevronRight,
   Clock3,
   ImagePlus,
   Link2,
   LoaderCircle,
   Package,
-  PauseCircle,
   Plus,
   Upload,
   X,
@@ -66,6 +64,10 @@ const modelStatus = (p: ProductDraft) =>
         : canTryProduct(p)
           ? "Ready for a size preview"
           : "Measurements needed";
+
+function isCompleteProductLink(value:string):boolean {
+  try {const link=new URL(value.trim()),host=link.hostname.toLowerCase();return link.protocol==='https:'&&!link.username&&!link.password&&((host==='flipkart.com'||host.endsWith('.flipkart.com'))&&/\/p\/[^/]+/.test(link.pathname)||(host==='amazon.in'||host.endsWith('.amazon.in'))&&/\/(?:dp|gp\/product)\/[a-z\d]{10}(?:[/?]|$)/i.test(link.pathname)||['amzn.in','amzn.to'].includes(host)&&link.pathname.length>1);}catch{return false;}
+}
 
 export function useProductSheetFocus(ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
@@ -135,6 +137,8 @@ export default function ProductWorkbench({
   pipelineSession,
   pipelineJobs = [],
   onCancelGeneration,
+  autoStart,
+  onSourceChange,
 }: ProductWorkbenchProps) {
   const [tab, setTab] = useState<"link" | "library">("link");
   const [draft, setDraft] = useState<ProductDraft>(() => {
@@ -147,6 +151,8 @@ export default function ProductWorkbench({
         .submittedUrl ?? "",
   );
   const [specifications, setSpecifications] = useState("");
+  const [detailsOpen,setDetailsOpen]=useState(false),[autoRequested,setAutoRequested]=useState(Boolean(autoStart));
+  const starting=useRef(false),attemptedLinks=useRef(new Set<string>()),sourceEpoch=useRef(0);
   const [busy, setBusy] = useState<
     "read" | "image" | "model" | "generate" | null
   >(null);
@@ -188,7 +194,7 @@ export default function ProductWorkbench({
   };
   const selectedImage = productImage(draft);
   const safeImage =
-    selectedImage && isSafeProductImageUrl(selectedImage.url)
+    selectedImage && (detailsOpen || !url.trim() || [draft.source.submittedUrl,draft.source.canonicalUrl].includes(url.trim())) && isSafeProductImageUrl(selectedImage.url)
       ? selectedImage.url
       : null;
   const reviewIssues = getProductReviewIssues(draft);
@@ -255,25 +261,38 @@ export default function ProductWorkbench({
   };
   const signInWithDraft = () => {
     const product=saveLinkDraft();
-    try {sessionStorage.setItem('roomshift-pending-product-v1',JSON.stringify({product,savedAt:Date.now()}));} catch {/* The device copy remains available if session storage is blocked. */}
+    try {sessionStorage.setItem('roomshift-pending-product-v1',JSON.stringify({product,savedAt:Date.now(),autoGenerate:true}));} catch {/* The device copy remains available if session storage is blocked. */}
   };
   const createModel = async () => {
-    if (inProgress) return;
+    if (starting.current || inProgress) return;
+    if (!isCompleteProductLink(url)) {setError('Paste the complete HTTPS product link from Amazon or Flipkart.');return;}
+    starting.current=true;const epoch=sourceEpoch.current;
+    attemptedLinks.current.add(url.trim());
     setError('');
-    if (!session?.user) { saveLinkDraft(); setError('Sign in to create a private model. Your draft is saved in My products.'); return; }
-    if (!localAvailable) { setError(pipelineSession?.reason ?? 'The model studio is unavailable right now. You can still read product details or import a model.'); return; }
-    let product = draft;
-    if (url.trim() && (draft.source.submittedUrl !== url.trim() || !draft.title)) {
-      const read = await readProduct();
-      if (!read) return;
-      product = read;
-    }
-    if (!product.source.submittedUrl && !product.source.canonicalUrl) { setError('Paste an Amazon or Flipkart product link to create its model.'); return; }
-    setBusy('generate');
-    try { await onGenerate(product); if(alive.current)setNotice('Your model is being prepared. You can close this panel and keep arranging your room; it will appear in My products.'); }
-    catch(e){if(alive.current)setError(e instanceof Error?e.message:'Model creation could not start. Your product is saved.');}
-    finally{if(alive.current)setBusy(null);}
+    try {
+      if (!session?.user) { saveLinkDraft(); setError('Sign in to create and link this model. Your pasted link is saved.'); return; }
+      let product = draft;
+      const cached=products.find(p=>p.model.state==='ready'&&p.model.draftRevision===p.revision&&[p.source.submittedUrl,p.source.canonicalUrl].includes(url.trim()));
+      if(cached){product=cached;setDraft(structuredClone(cached));}
+      if (!cached && !(draft.model.state==='ready'&&draft.model.draftRevision===draft.revision&&draft.source.submittedUrl===url.trim()) && url.trim() && (draft.source.submittedUrl !== url.trim() || !draft.title || !draft.images.length)) {
+        const read = await readProduct();
+        if (!read) return;
+        product = read;
+      }
+      if(epoch!==sourceEpoch.current||!alive.current)return;
+      setBusy('generate');
+      await onGenerate(product);
+      if(alive.current)setNotice('Creating your product model. It will be linked to your room automatically. You can keep arranging while it runs.');
+    } catch(e){if(alive.current)setError(e instanceof Error?e.message:'Model creation could not start. Your link is saved.');}
+    finally{starting.current=false;if(alive.current)setBusy(null);}
   };
+  useEffect(()=>{
+    if(!autoRequested||tab!=='link'||!session||!pipelineSession||busy||inProgress||!isCompleteProductLink(url)||attemptedLinks.current.has(url.trim()))return;
+    const sameReady=draft.model.state==='ready'&&draft.model.draftRevision===draft.revision&&draft.source.submittedUrl===url.trim();
+    if(sameReady&&!autoStart)return;
+    const timer=setTimeout(()=>void createModel(),650);
+    return()=>clearTimeout(timer);
+  },[url,autoRequested,autoStart,tab,session,pipelineSession,busy,inProgress,draft.id,draft.revision,draft.model.state]);
   const fileAction = async (
     file: File | undefined,
     kind: "image" | "model",
@@ -335,6 +354,8 @@ export default function ProductWorkbench({
     setSpecifications("");
     setError("");
     setNotice("");
+    setAutoRequested(false);
+    setDetailsOpen(false);
     setTab("link");
   };
   return (
@@ -433,29 +454,17 @@ export default function ProductWorkbench({
                       type="url"
                       placeholder="Paste a product link…"
                       value={url}
-                      onChange={(e) => setUrl(e.target.value)}
+                      onChange={(e) => {sourceEpoch.current++;setUrl(e.target.value);setAutoRequested(true);setError('');setNotice('');onSourceChange?.();}}
                       disabled={busy === "read"}
                       autoComplete="off"
                     />
                   </div>
-                  <button
-                    className="pw-button pw-primary"
-                    type="submit"
-                    disabled={Boolean(busy) || !url.trim() || inProgress || (draft.model.state === "ready" && draft.model.appearance === "ai-generated" && draft.model.draftRevision === draft.revision)}
-                  >
-                    {busy === "read" ? (
-                      <LoaderCircle size={16} className="spin" />
-                    ) : (
-                      <ArrowUpRight size={16} />
-                    )}{" "}
-                    {busy === "read" ? "Reading…" : busy === "generate" ? "Starting…" : "Create model"}
-                  </button>
+                  {error && <button className="pw-button pw-primary" type="submit" disabled={Boolean(busy)||inProgress||!url.trim()}>Retry model <ArrowUpRight size={16}/></button>}
                 </form>
                 <p className="pw-hint">
-                  We collect photos, review the dimensions and create an approximate 3D model. You review it before anything changes in your room.
+                  Paste the link. We collect the product photos and dimensions, create its 3D model and link it to your room automatically.
                 </p>
                 <div className="pw-link-options">
-                  <button className="pw-text-button" disabled={Boolean(busy)||!url.trim()} onClick={()=>void readProduct()}>Read product details only</button>
                   {!session?.user && pipelineSession && <a className="pw-text-button" href="/signin-with-chatgpt?return_to=/" target="_top" onClick={signInWithDraft}>Sign in to create a model <ArrowUpRight size={13}/></a>}
                 </div>
               </section>
@@ -468,6 +477,23 @@ export default function ProductWorkbench({
                   {error || notice}
                 </div>
               )}
+              <div className="pw-workbench-grid">
+                <section aria-label="Model progress">
+                  <div className="pw-generation-status available" role="status" aria-live="polite">
+                    <span className="pw-status-title">{inProgress||busy ? <LoaderCircle size={17} className="spin"/> : <Package size={17}/>} {busy==='read'?'Reading product photos and dimensions':busy==='generate'?'Starting your model':inProgress?pipelineStageLabel(job?.stage??'queued'):draft.model.state==='ready'?'Your product model is ready':'Your product, in your room'}</span>
+                    <p>{inProgress?'You can close this panel and keep arranging. The finished model will be linked to your room automatically.':draft.model.state==='ready'?'The actual generated shape is saved with your product.':'Paste an Amazon or Flipkart product link above to begin. No measurements or furniture choices are needed.'}</p>
+                    {(inProgress||busy)&&<span className="pw-pipeline-track" aria-hidden="true"><span/></span>}
+                    {draft.model.error&&<p className="pw-warning">{draft.model.error}</p>}
+                    {onCancelGeneration&&inProgress&&(job?.id||draft.model.jobId)&&<button className="pw-text-button" onClick={async()=>{setAutoRequested(false);try{await onCancelGeneration((job?.id??draft.model.jobId)!);}catch(e){setError(e instanceof Error?e.message:'Could not cancel. Please try again.');}}}>Cancel model creation</button>}
+                    {!localAvailable&&!inProgress&&session?.user&&pipelineSession?.reason&&<p className="pw-hint">{pipelineSession.reason}</p>}
+                  </div>
+                </section>
+                <aside className="pw-appearance"><div className="pw-image-stage">{safeImage?<img src={safeImage} alt={draft.title||'Product photo from the listing'}/>:<div className="pw-image-placeholder"><Link2 size={36} strokeWidth={1}/><span>The product photo appears here</span><small>We use photos from your link.</small></div>}<span className="pw-image-label">{safeImage?'Photo from your product link':'Product reference'}</span></div></aside>
+              </div>
+              <details className="pw-recovery" open={detailsOpen} onToggle={event=>setDetailsOpen(event.currentTarget.open)}>
+                <summary>Edit details or import a model <ChevronRight size={15}/></summary>
+                <p className="pw-hint">Optional controls for manual edits, specifications or your own 3D model.</p>
+                <button className="pw-text-button" disabled={Boolean(busy)||!url.trim()} onClick={()=>{setAutoRequested(false);void readProduct();}}>Read product details only</button>
               <div className="pw-workbench-grid">
                 <section
                   className="pw-product-review"
@@ -745,25 +771,6 @@ export default function ProductWorkbench({
                       void fileAction(e.target.files?.[0], "model")
                     }
                   />
-                  <div className={`pw-generation-status ${localAvailable || inProgress ? 'available' : ''}`}>
-                    <span className="pw-status-title">{inProgress ? <LoaderCircle size={17} className="spin"/> : <Package size={17}/>} Product to 3D model</span>
-                    {inProgress ? <div className="pw-pipeline-progress" role="status" aria-live="polite">
-                      <strong>{pipelineStageLabel(job?.stage ?? 'queued')}</strong>
-                      <p>You can close this panel and keep arranging. Your private model will appear in My products.</p>
-                      <span className="pw-pipeline-track" aria-hidden="true"><span/></span>
-                      {onCancelGeneration && (job?.id || draft.model.jobId) && <button className="pw-text-button" onClick={async()=>{try{await onCancelGeneration((job?.id??draft.model.jobId)!);}catch(e){setError(e instanceof Error?e.message:'Could not cancel. Please try again.');}}}>Cancel model creation</button>}
-                    </div> : draft.model.state==='ready' && draft.model.appearance==='ai-generated' ? <>
-                      <p><CheckCircle2 size={14}/> Your generated model is ready to review.</p>
-                      <p className="pw-hint">Its hidden surfaces and fine details are inferred. Check the assembled size before trying it in your room.</p>
-                      {!allConfirmed && <span className="pw-subtle-status">Review the measurements on the left to continue.</span>}
-                    </> : <>
-                      <p>{!session?.user ? 'Sign in to create and save a private model from a product link.' : localAvailable ? `${pipelineSession!.remainingJobs} model${pipelineSession!.remainingJobs===1?'':'s'} available today. Photos and measurements are reviewed automatically.` : pipelineSession?.reason ?? 'Checking model studio availability…'}</p>
-                      {draft.model.error && <p className="pw-warning">{draft.model.error}</p>}
-                      <p className="pw-hint">An approximate model built from the listing photos. You can check uncertain measurements after it is ready.</p>
-                      <span className="pw-subtle-status">Use Create model above to begin. No measurement check is needed yet.</span>
-                    </>}
-                    <span className="pw-subtle-status"><PauseCircle size={14}/> {pipelineSession?.enabled ? 'Paid 3D generation is paused' : 'Detailed model generation is paused'}</span>
-                  </div>
                   <div className="pw-size-preview-note">
                     <Clock3 size={17} />
                     <p>
@@ -774,6 +781,7 @@ export default function ProductWorkbench({
                   </div>
                 </aside>
               </div>
+              </details>
             </>
           ) : (
             <section className="pw-library">
@@ -785,6 +793,8 @@ export default function ProductWorkbench({
                 <button
                   className="pw-button pw-secondary"
                   onClick={() => {
+                    setAutoRequested(false);
+                    setDetailsOpen(false);
                     setDraft(createProductDraft(roomId));
                     setUrl("");
                     setSpecifications("");
@@ -869,7 +879,7 @@ export default function ProductWorkbench({
             </section>
           )}
         </div>
-        {tab === "link" && (
+        {tab === "link" && detailsOpen && (
           <footer className="pw-footer">
             <div>
               <strong>

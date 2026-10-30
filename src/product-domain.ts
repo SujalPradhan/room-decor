@@ -1,8 +1,9 @@
-import type { FurnitureItem, ItemKind } from './types';
+import type { Dimensions, FurnitureItem, ItemKind } from './types';
 import type { GenerationJob, ProductAxis, ProductDraft, ProductImage, ProductMeasurement } from './product-types';
 import { createFurnitureItem } from './domain';
 import { createReplacementDraft } from './replacement';
 import { DIMENSION_LIMITS } from './measurements';
+import { isSupportedAssetId } from './catalog';
 
 export const PRODUCT_AXES = ['width', 'depth', 'height'] as const;
 export const PRODUCT_KINDS: ItemKind[] = ['bed', 'wardrobe', 'desk', 'chair', 'floor-bed', 'pedestal-fan', 'stool', 'plant', 'shelf'];
@@ -107,17 +108,21 @@ export function applySpecifications(draft: ProductDraft, text: string): ProductD
   const parsed = parseProductSpecifications(text);
   return updateProductDraft(draft, { dimensions: parsed.dimensions, kind: draft.kind ?? parsed.kind, specificationWarnings: parsed.warnings });
 }
-function materialSignature(draft: ProductDraft): string {
-  return JSON.stringify([draft.kind, draft.variant, draft.source.productId, draft.source.canonicalUrl, PRODUCT_AXES.map(a => draft.dimensions[a].metres), draft.selectedImageId, draft.images.map(i => [i.id, i.assetId, i.source, i.source === 'listing' ? i.url : ''])]);
+function referenceSignature(draft: ProductDraft): string {
+  return JSON.stringify([draft.variant, draft.source.retailer, draft.source.productId, draft.source.canonicalUrl, draft.source.submittedUrl, draft.selectedImageId, draft.images.map(i => [i.id, i.assetId, i.source, i.source === 'listing' ? i.url : ''])]);
 }
-/** Material review changes invalidate old generation/import associations; binary assets remain stored for history. */
+function materialSignature(draft: ProductDraft): string {
+  return JSON.stringify([draft.kind, referenceSignature(draft), PRODUCT_AXES.map(a => draft.dimensions[a].metres)]);
+}
+/** Reference changes invalidate geometry; category and size edits can reuse the same ready asset. */
 export function updateProductDraft(draft: ProductDraft, patch: Partial<ProductDraft>): ProductDraft {
   const next = { ...structuredClone(draft), ...structuredClone(patch), id: draft.id, roomId: draft.roomId, createdAt: draft.createdAt, revision: draft.revision, updatedAt: now() };
   if (materialSignature(next) !== materialSignature(draft)) {
     next.revision = draft.revision + 1;
-    const sameProduct = JSON.stringify([draft.kind, draft.variant, draft.source.productId, draft.source.canonicalUrl]) === JSON.stringify([next.kind, next.variant, next.source.productId, next.source.canonicalUrl]);
-    next.model = sameProduct && draft.model.state === 'ready' && draft.model.appearance === 'seller-model'
-      ? { ...draft.model, draftRevision: next.revision }
+    const sameReference = referenceSignature(draft) === referenceSignature(next);
+    const actualModel = draft.model.state === 'ready' && draft.model.draftRevision === draft.revision && ['seller-model', 'ai-generated'].includes(draft.model.appearance) && Boolean(draft.model.localAssetId || draft.model.remoteAssetId);
+    next.model = sameReference && actualModel
+      ? { ...draft.model, draftRevision: next.revision, scaleSource: PRODUCT_AXES.every(a => next.dimensions[a].metres !== null && next.dimensions[a].confirmed) ? 'listing' : 'estimated' }
       : { state: 'proxy', appearance: 'size-preview', draftRevision: next.revision };
   }
   return next;
@@ -139,6 +144,22 @@ export function productToFurniture(draft: ProductDraft, original?: FurnitureItem
   if (issues.length) throw new Error(issues.join(' '));
   const item: FurnitureItem & { productId?: string } = { ...createFurnitureItem(draft.kind!), name: draft.title.trim().slice(0, 80), dimensions: { width: draft.dimensions.width.metres!, depth: draft.dimensions.depth.metres!, height: draft.dimensions.height.metres! }, dimensionSource: 'product', productId: draft.id };
   if (draft.model.state === 'ready' && draft.model.draftRevision === draft.revision && draft.model.localAssetId?.startsWith('local:')) item.assetId = draft.model.localAssetId;
+  return original ? createReplacementDraft(original, item) : item;
+}
+/** Automatic placement accepts uncertain evidence only when an actual generated model is ready. */
+export function generatedProductToFurniture(draft: ProductDraft, original?: FurnitureItem | null): FurnitureItem {
+  const safe = validateProductDraft(draft), model = safe.model;
+  if (model.state !== 'ready' || model.appearance !== 'ai-generated' || model.draftRevision !== safe.revision || !model.localAssetId?.startsWith('local:') || !isSupportedAssetId(model.localAssetId))
+    throw new Error('The generated 3D model is not ready for placement.');
+  const dimensions = {} as Dimensions;
+  for (const axis of PRODUCT_AXES) {
+    const value = safe.dimensions[axis].metres ?? model.placementDimensions?.[axis], limits = DIMENSION_LIMITS[axis];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < limits.min || value > limits.max)
+      throw new Error('The generated model has no usable placement size.');
+    dimensions[axis] = value;
+  }
+  const confirmed = model.scaleSource !== 'estimated' && PRODUCT_AXES.every(a => safe.dimensions[a].metres !== null && safe.dimensions[a].confirmed);
+  const item: FurnitureItem = { ...createFurnitureItem(safe.kind ?? original?.kind ?? 'chair'), name: safe.title.trim().slice(0, 80) || 'Product', dimensions, dimensionSource: confirmed ? 'product' : 'estimated', productId: safe.id, assetId: model.localAssetId };
   return original ? createReplacementDraft(original, item) : item;
 }
 export function applyGenerationResult(draft: ProductDraft, job: GenerationJob, localAssetId?: string): ProductDraft {
@@ -192,6 +213,19 @@ export function validateProductDraft(value: unknown): ProductDraft {
   const safeModel: ProductDraft['model'] = { state: model.state as ProductDraft['model']['state'], appearance: model.appearance as ProductDraft['model']['appearance'] };
   for (const field of ['jobId', 'localAssetId', 'remoteAssetId', 'error'] as const) if (model[field] !== undefined) safeModel[field] = str(model[field], `Product model ${field}`, field === 'error' ? 1000 : 160);
   if (model.draftRevision !== undefined) safeModel.draftRevision = model.draftRevision as number;
+  if (model.placementDimensions !== undefined) {
+    const bounds = object(model.placementDimensions, 'Model placement dimensions'), checked = {} as Dimensions;
+    for (const axis of PRODUCT_AXES) {
+      const value = bounds[axis], limits = DIMENSION_LIMITS[axis];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < limits.min || value > limits.max) throw new Error(`Model placement ${axis} is invalid.`);
+      checked[axis] = value;
+    }
+    safeModel.placementDimensions = checked;
+  }
+  if (model.scaleSource !== undefined) {
+    if (!['listing', 'estimated'].includes(model.scaleSource as string)) throw new Error('Model scale source is invalid.');
+    safeModel.scaleSource = model.scaleSource as 'listing' | 'estimated';
+  }
   const warnings = p.specificationWarnings;
   if (warnings !== undefined && (!Array.isArray(warnings) || warnings.length > 30 || warnings.some(w => typeof w !== 'string' || w.length > 1000))) throw new Error('Product specification warnings are invalid.');
   return { id: str(p.id, 'Product ID', 160), roomId: str(p.roomId, 'Product room ID', 160), revision: p.revision as number, createdAt: date(p.createdAt, 'Product created time'), updatedAt: date(p.updatedAt, 'Product updated time'), source: { retailer: s.retailer as ProductDraft['source']['retailer'], ...(sourceUrl(s.submittedUrl) ? { submittedUrl: sourceUrl(s.submittedUrl) } : {}), ...(sourceUrl(s.canonicalUrl) ? { canonicalUrl: sourceUrl(s.canonicalUrl) } : {}), ...(s.productId === undefined ? {} : { productId: str(s.productId, 'Retailer product ID', 160) }) }, title: str(p.title, 'Product name', 200, true), kind: p.kind as ItemKind | null, variant: str(p.variant, 'Product variant', 300, true), dimensions, images, ...(selectedImageId ? { selectedImageId } : {}), model: safeModel, ...(warnings ? { specificationWarnings: warnings as string[] } : {}) };

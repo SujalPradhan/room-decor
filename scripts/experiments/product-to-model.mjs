@@ -18,7 +18,7 @@ if((config.LLMFOUNDRY_TOKEN||config.LLMFOUNDRY_API_KEY||config.API_KEY)&&config.
  stage('analyzing');await run(process.execPath,['--experimental-transform-types','scripts/experiments/analyze-product.mjs',output]);foundry=JSON.parse(await readFile(resolve(output,'foundry-analysis.json'),'utf8'));
 }
 const product=JSON.parse(await readFile(resolve(output,'product.json'),'utf8'));
-if(!['width','depth','height'].every(a=>product.dimensions[a].metres>0))throw Error('The listing still has incomplete outer dimensions. Review its specifications before metric conversion.');
+// Missing measurements do not block a visual model. Conversion records an estimated display scale separately.
 const extraction=JSON.parse(await readFile(resolve(output,'extraction-report.json'),'utf8'));
 const selectedIndex=product.images.findIndex(i=>i.id===product.selectedImageId),photo=extraction.photos.find(p=>p.id===product.selectedImageId)??extraction.photos[selectedIndex>=0?selectedIndex:0];if(!photo)throw Error('The selected product reference image is unavailable.');
 stage('preparing');const crop=foundry?.analysis?.cropBox;await run(python,['scripts/experiments/run-triposr.py','--input',resolve(output,photo.file),'--output',output,...(crop?.length===4?['--crop',...crop.map(String)]:[])]);

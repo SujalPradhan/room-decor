@@ -8,7 +8,7 @@ export interface ProductDraft {
  source: { retailer: 'amazon' | 'flipkart' | 'manual'; submittedUrl?: string; canonicalUrl?: string; productId?: string };
  title: string; kind: ItemKind | null; variant: string; images: ProductImage[]; selectedImageId?: string; specificationWarnings?: string[];
  dimensions: Record<ProductAxis, ProductMeasurement>;
- model: { state: 'proxy' | 'queued' | 'running' | 'ready' | 'failed'; appearance: 'size-preview' | 'ai-generated' | 'seller-model'; jobId?: string; localAssetId?: string; remoteAssetId?: string; error?: string; draftRevision?: number };
+ model: { state: 'proxy' | 'queued' | 'running' | 'ready' | 'failed'; appearance: 'size-preview' | 'ai-generated' | 'seller-model'; jobId?: string; localAssetId?: string; remoteAssetId?: string; error?: string; draftRevision?: number; placementDimensions?:Dimensions; scaleSource?:'listing'|'estimated' };
 }
 export type OperationKind = 'product-lookup' | 'room-analysis' | 'image-preparation' | 'model-generation' | 'model-import' | 'asset-download' | 'render' | 'validation';
 export interface OperationRecord {
@@ -33,7 +33,7 @@ export interface StudioSession {
 export interface ProductResolveInput { url?: string; specifications?: string; roomId: string; roomName?: string; componentId?: string }
 export interface ProductResolveResult { product: ProductDraft; operation: OperationRecord; notice?: string }
 export interface ProductWorkbenchProps {
- initialProductId?: string;
+ initialProductId?: string; autoStart?:boolean; onSourceChange?:()=>void;
  pipelineSession?: PipelineSession | null; pipelineJobs?: PipelineJob[]; onCancelGeneration?: (jobId:string)=>Promise<void>;
  storageNote?: string;
  original: FurnitureItem | null; roomId: string; roomName: string; products: ProductDraft[]; session: StudioSession | null;

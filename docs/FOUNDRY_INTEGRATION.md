@@ -1,6 +1,6 @@
 # Foundry integration for product-link reconstruction
 
-Updated 30 October 2026 following authenticated localhost validation on 29 October. The laptop-worker integration is included in this release. The research history below predates token configuration.
+Updated 30 October 2026 following authenticated localhost validation on 29 October. The underlying laptop-worker pipeline is validated; the new automatic paste-to-room interaction is implemented with live generation/automatic placement and cached reuse validated locally. The research history below predates token configuration.
 
 ## Implemented role
 
@@ -10,9 +10,9 @@ The server-only adapter calls Foundry's Gemini REST route with `gemini-2.5-flash
 
 The adapter restricts origins, rejects redirects, bounds responses and request duration, and uses fixed public error messages. Credentials are read by the local worker/analysis process; the browser, project exports and public reports do not receive them. The site needs the shared worker credential, not the Foundry key. Paid Meshy generation remains source-disabled.
 
-## Live validation: 29 October 2026
+## Pipeline validation history: 29 October 2026
 
-The supplied SNUZSPACE Flipkart recliner completed the real localhost queue → worker → Foundry → TripoSR → Blender → private model flow. This is one measured run, not a latency promise:
+The supplied SNUZSPACE Flipkart recliner completed the real localhost queue → worker → Foundry → TripoSR → Blender → private model flow using the earlier manual UI. This is one measured pipeline run, not validation of the new automatic paste-to-room interaction or a latency promise:
 
 | Stage | Observed result |
 | --- | --- |
@@ -22,14 +22,15 @@ The supplied SNUZSPACE Flipkart recliner completed the real localhost queue → 
 | Blender conversion | 0.987 seconds |
 | Textured GLB | 2,944,940 bytes; 70,000 faces |
 
-The diagram states width **32.5 inches** (82.55 cm), while the listing states **83.56 cm**. The pipeline retains this conflict and marks the affected evidence for review. Neither value is independently measured. Hidden geometry, appearance and orientation remain inferred. Only this recliner has been validated with live reconstruction; other furniture categories and Amazon listings are best-effort and unbenchmarked.
+The diagram states width **32.5 inches** (82.55 cm), while the listing states **83.56 cm**. The pipeline retains this conflict. Automatic visual placement may use the listing value as an estimate without requiring a checkbox or claiming confirmed fit; neither value is independently measured. Missing product measurements remain null, with separate model placement bounds/scale provenance supplying estimated display size. Hidden geometry, appearance and orientation remain inferred. Only this recliner has been validated with live reconstruction; other furniture categories and Amazon listings are best-effort and unbenchmarked.
 
 ## Metering and operation
 
 **Cost & time** records the returned model, actual tokens, image count and observed elapsed time alongside local reconstruction/conversion operations. Monetary Foundry cost remains **unknown** until reconciled with account usage and pricing; direct-provider prices are not substituted. The mesh has no external 3D-generation API fee. Device, electricity and hosting/storage costs are unmetered.
 
-Double-click **Start Roomshift Generator.command** to open the public studio and start the bounded worker. It invokes Node with `--env-file=../.env`, at most three jobs and one idle hour. Keep the Mac awake and the terminal open. Communication is outgoing-only; no inbound laptop port is opened. Model submission/private results require sign-in. The queue enforces daily limits, one active job per person, one reconstruction globally, cancellation and stale-result guards. See [the pipeline guide](AUTOMATIC_PRODUCT_PIPELINE.md).
+Pasting a complete supported product URL starts the implemented flow after 650 ms: collection → Foundry evidence → local reconstruction/conversion → automatic add or selected replacement using the actual GLB in the intended room/layout. No category, dimensions, upload, Generate click or final confirmation is required. Platform sign-in remains necessary once; the pasted link resumes after sign-in. Optional Advanced controls permit corrections. Account-scoped compatible ready models can be reused; category/size edits preserve ready geometry while identity/reference changes invalidate it. Placement is one undoable change and preserves Original. A real localhost run created and automatically placed the recliner; a cached replay passed placement, Undo and reload checks without another generation job.
 
+Install the [Mac background generator](AUTOMATIC_GENERATOR_SERVICE.md) once for LaunchAgent startup at login and ordinary use without a terminal. The Mac must remain awake/reachable; sleep is prevented only during active jobs. The bounded **Start Roomshift Generator.command** remains an optional manual fallback. Communication is outgoing-only, with no inbound laptop port. Private jobs/assets require sign-in. Server limits remain one active job per person, three attempts per person and six globally per UTC day, with one reconstruction globally; failed/cancelled attempts count. See [the pipeline guide](AUTOMATIC_PRODUCT_PIPELINE.md).
 ## Research history: earlier on 29 October 2026
 
 The original assessment occurred before credentials were configured and before model requests were made. It recommended retaining direct retailer extraction, adding Foundry vision/structured evidence, and using TripoSR/Blender for geometry. That architecture is now implemented and locally validated. The earlier claim “no credentials used and no model/inference request made” applies only to that initial research pass.
