@@ -330,9 +330,12 @@ export default function CostTimePanel({
   );
   const usedCredits = summary.credits.filter((c) =>
     records.some(
-      (r) => r.usage.creditUnit === c.unit && r.usage.credits !== undefined,
+      (r) => `${r.provider ?? r.engine}:${r.usage.creditUnit}` === c.unit && r.usage.credits !== undefined && !r.reusedFrom,
     ),
   );
+  const tokenRecords = records.filter(r => !r.reusedFrom && (r.usage.inputTokens !== undefined || r.usage.outputTokens !== undefined));
+  const recordedTokens = tokenRecords.reduce((sum,r) => sum + (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0), 0);
+  const usageParts = [...usedCredits.map(c => `${c.used} ${c.unit}`), ...(tokenRecords.length ? [`${recordedTokens.toLocaleString()} tokens`] : [])];
   const hasMoneyBasis = (currency: string, basis: "estimated" | "reported") =>
     records.some(
       (r) =>
@@ -541,14 +544,10 @@ export default function CostTimePanel({
                 <div className="ct-summary-card">
                   <span>Processing usage</span>
                   <strong>
-                    {usedCredits.length
-                      ? usedCredits
-                          .map((c) => `${c.used} ${c.unit}`)
-                          .join(" + ")
-                      : "Not recorded"}
+                    {usageParts.length ? usageParts.join(" · ") : "Not recorded"}
                   </strong>
                   <small>
-                    Provider credits and money are separate measures.
+                    Reported input/output tokens and provider credits are separate from money.
                   </small>
                 </div>
                 <div className="ct-summary-card">

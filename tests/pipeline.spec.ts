@@ -22,7 +22,7 @@ async function mockPipeline(page:Page, assetFails=false){
    product=request.postDataJSON().product;job={id:'pipeline-test-job',productId:product!.id,roomId:product!.roomId,requestedRevision:product!.revision,status:'queued',stage:'queued',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};data={job};
   }else if(path==='/api/pipeline/jobs/pipeline-test-job/cancel'){cancelled=true;job={...job!,status:'cancelled',stage:'cancelled',updatedAt:new Date().toISOString()};data={job};}
   else if(path==='/api/pipeline/jobs/pipeline-test-job'){
-   job={...job!,status:cancelled?'cancelled':complete?'succeeded':'running',stage:cancelled?'cancelled':complete?'ready':'reconstructing',updatedAt:new Date().toISOString(),...(complete?{result:{product:product!,assetId:'pipeline-test-model',url:'/api/assets/pipeline-test-model',warnings:['Hidden surfaces are inferred. Check dimensions before use.']}}:{})};data={job};
+   job={...job!,status:cancelled?'cancelled':complete?'succeeded':'running',stage:cancelled?'cancelled':complete?'ready':'reconstructing',updatedAt:new Date().toISOString(),...(complete?{result:{product:product!,assetId:'pipeline-test-model',url:'/api/assets/pipeline-test-model',warnings:['Hidden surfaces are inferred. Check dimensions before use.']},operations:[{id:'foundry-pipeline-operation',roomId:product!.roomId,productId:product!.id,attempt:1,kind:'validation',name:'Review test photos',status:'succeeded',engine:'Vision review',provider:'Test vision provider',model:'fixture-vision',submittedAt:new Date().toISOString(),timing:{source:'observed',elapsedMs:5436,processingMs:5436},usage:{inputTokens:1752,outputTokens:490,credits:0.5,creditUnit:'credits'},cost:{basis:'unknown'}}]}:{})};data={job};
   }else if(path==='/api/assets/pipeline-test-model'){downloaded++;if(assetFails){await route.fulfill({status:503,json:{error:'Temporary download failure'}});return;}await route.fulfill({status:200,contentType:'model/gltf-binary',body:readFileSync(resolve('public/assets/furniture.glb'))});return;}
   else if(path==='/api/generations'){paid++;await route.fulfill({status:403,json:{error:'Paid generation paused'}});return;}
   else{await route.continue();return;}
@@ -46,6 +46,8 @@ test('one product link creates a private model in the background before any plac
  await page.getByRole('button',{name:'Review',exact:true}).click();await expect(page.getByText('Your generated model is ready to review.',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Try in room',exact:true})).toBeDisabled();await page.getByRole('checkbox',{name:/I checked all three/}).check();
  await page.getByRole('button',{name:'Try in room',exact:true}).click();expect(await layouts(page)).toEqual(before);await expect(page.getByRole('button',{name:'Add to room',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Cost & time',exact:true}).click();
+ const usage=page.locator('.ct-summary-card').filter({hasText:'Processing usage'});await expect(usage).toContainText('2,242 tokens');await expect(usage).toContainText('0.5 Test vision provider:credits');
 });
 
 test('edits made while reconstruction runs keep their values when its older result returns',async({page})=>{
