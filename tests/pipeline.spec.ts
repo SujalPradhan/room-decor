@@ -30,7 +30,7 @@ async function mockPipeline(page:Page, assetFails=false){
  });
  return {finish,get downloaded(){return downloaded;},get paid(){return paid;},get jobs(){return jobs;},get lookups(){return lookups;},get product(){return product;}};
 }
-async function room(page:Page){await page.goto('/');await expect(page.locator('canvas')).toBeVisible();await expect(page.locator('.stage-loading')).toHaveCount(0,{timeout:30000});}
+async function room(page:Page){await page.goto('/');await expect(page.locator('canvas')).toBeVisible();await expect(page.locator('.stage-loading')).toHaveCount(0,{timeout:30000});await expect.poll(()=>page.evaluate(()=>localStorage.getItem('roomshift-project-v1'))).not.toBeNull();}
 async function workbench(page:Page){if((page.viewportSize()?.width??1512)<800)await page.getByRole('button',{name:'Furniture',exact:true}).click();await page.getByRole('button',{name:/Add furniture/}).click();await page.getByRole('button',{name:/Try a product link/}).click();}
 async function layouts(page:Page){return page.evaluate(()=>JSON.parse(localStorage.getItem('roomshift-project-v1')!).layouts);}
 
