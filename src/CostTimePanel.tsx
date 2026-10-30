@@ -636,10 +636,9 @@ export default function CostTimePanel({
               <div className="ct-truth-note">
                 <PauseCircle size={20} />
                 <div>
-                  <strong>Detailed model generation is paused.</strong>
+                  <strong>Processing costs stay traceable.</strong>
                   <p>
-                    Included room and furniture assets have no recorded
-                    generation history here. An empty history means “not
+                    Local reconstruction and model-provider activity appear as they happen. Paid 3D generation remains paused. Included assets have no recorded generation history here. An empty history means “not
                     recorded”, rather than a claim that past processing cost
                     nothing.
                   </p>

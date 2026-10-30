@@ -79,3 +79,38 @@ export const studioAccounts = sqliteTable("studio_accounts", {
   reservedCredits: integer("reserved_credits").notNull().default(0),
   consumedCredits: integer("consumed_credits").notNull().default(0),
 });
+
+
+/** Separate from paid-provider jobs: one manually operated laptop pilot. */
+export const studioPipelineJobs = sqliteTable(
+  "studio_pipeline_jobs",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    productId: text("product_id").notNull(),
+    roomId: text("room_id").notNull(),
+    requestedRevision: integer("requested_revision").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    productJson: text("product_json").notNull(),
+    status: text("status").notNull(),
+    stage: text("stage").notNull(),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: text("lease_expires_at"),
+    resultJson: text("result_json"),
+    operationsJson: text("operations_json"),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("studio_pipeline_owner_idempotency").on(t.ownerId, t.idempotencyKey),
+    index("studio_pipeline_owner_created").on(t.ownerId, t.createdAt),
+    index("studio_pipeline_status_created").on(t.status, t.createdAt),
+  ],
+);
+export const studioPipelineWorkers = sqliteTable("studio_pipeline_workers", {
+  id: text("id").primaryKey(),
+  online: integer("online").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

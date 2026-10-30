@@ -1,3 +1,4 @@
+import type { PipelineJob, PipelineSession } from './pipeline-types';
 import type { Dimensions, ItemKind, FurnitureItem } from './types';
 export type ProductAxis = keyof Dimensions;
 export interface ProductMeasurement { metres: number | null; origin: 'listing' | 'user' | 'unknown'; evidence?: string; confirmed: boolean }
@@ -33,6 +34,7 @@ export interface ProductResolveInput { url?: string; specifications?: string; ro
 export interface ProductResolveResult { product: ProductDraft; operation: OperationRecord; notice?: string }
 export interface ProductWorkbenchProps {
  initialProductId?: string;
+ pipelineSession?: PipelineSession | null; pipelineJobs?: PipelineJob[]; onCancelGeneration?: (jobId:string)=>Promise<void>;
  storageNote?: string;
  original: FurnitureItem | null; roomId: string; roomName: string; products: ProductDraft[]; session: StudioSession | null;
  onResolve: (input: ProductResolveInput) => Promise<ProductResolveResult>;

@@ -1475,3 +1475,11 @@
 .product-preview-copy{font-size:12px;line-height:1.7;color:#b8c2ae}.product-preview-copy svg{vertical-align:middle;margin-right:5px}
 .product-fit-card{padding:14px;margin:18px 0;border:1px solid #778d674a;border-radius:8px;font-size:12px;line-height:1.6;background:#2c382e;color:#e4e8dc}.product-fit-card.has-issues{border-color:#d8be8c66;background:#3b3828;color:#f1e5c6}.product-fit-card p{margin:8px 0 0}.product-source-link{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:#dabe89}
 @media(max-width:800px){.studio-cost-button{font-size:0!important;gap:0!important;width:34px;padding:7px!important}.studio-cost-button span{display:none}.studio-cost-button svg{width:17px;height:17px}.studio-account{width:30px;height:30px}.header-actions{gap:5px!important}}
+.pw-link-options { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin-top:12px; }
+.pw-link-options a { display:inline-flex; align-items:center; gap:4px; text-decoration:none; }
+.pw-pipeline-progress { margin-top:14px; }
+.pw-pipeline-progress > strong { font-size:14px; line-height:1.5; }
+.pw-pipeline-track { display:block; width:100%; height:4px; border-radius:4px; background:rgba(80,120,101,.16); overflow:hidden; margin:16px 0; }
+.pw-pipeline-track > span { display:block; width:40%; height:100%; border-radius:inherit; background:#638870; animation:pw-progress 1.9s ease-in-out infinite alternate; }
+@keyframes pw-progress { from { transform:translateX(-50%); } to { transform:translateX(200%); } }
+@media (prefers-reduced-motion:reduce) { .pw-pipeline-track > span { animation:none; width:100%; opacity:.55; } }

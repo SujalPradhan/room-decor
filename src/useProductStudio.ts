@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OperationRecord, ProductDraft, ProductResolveInput, StudioSession } from './product-types';
 import { createProductDraft, applySpecifications, updateProductDraft, validateProductDraft } from './product-domain';
 import { createLocalOperation, mergeOperations } from './ledger';
-import { getStudioSession, listRemoteProducts, listRemoteOperations, resolveProduct, saveRemoteProduct, uploadAsset, requestGeneration, downloadAsset, StudioApiError } from './product-client';
+import { getStudioSession, listRemoteProducts, listRemoteOperations, resolveProduct, saveRemoteProduct, uploadAsset, downloadAsset, StudioApiError } from './product-client';
 import { loadProductWorkspace, setProductStorageScope, saveProduct, saveOperation, saveProductImage, hydrateProductImages } from './product-storage';
+import { createPipelineJob, getPipelineJob, getPipelineSession, cancelPipelineJob } from './pipeline-client';
+import type { PipelineJob, PipelineSession } from './pipeline-types';
 import { storeLocalModel, getLocalModel } from './local-assets';
 
 const PAUSED: StudioSession = { user:null,storageAvailable:false,generation:{enabled:false,available:false,provider:'Meshy',model:'meshy-6',estimatedCredits:null,creditUnit:'Meshy credits',remainingCredits:null,reason:'Detailed AI generation is paused. You can try dimensions or import a 3D model.'} };
@@ -15,8 +17,16 @@ function cloudDraft(product:ProductDraft):ProductDraft{
  if(!copy.images.some(i=>i.id===copy.selectedImageId))delete copy.selectedImageId;
  return copy;
 }
+function mergePipelineResult(job:PipelineJob,latest:ProductDraft,localAssetId?:string):ProductDraft{
+ const product=job.result!.product;
+ return validateProductDraft({...product,title:latest.title||product.title,dimensions:Object.fromEntries((['width','depth','height'] as const).map(axis=>[axis,latest.dimensions[axis].origin==='user'||latest.dimensions[axis].confirmed?latest.dimensions[axis]:product.dimensions[axis]])),updatedAt:new Date().toISOString(),specificationWarnings:[...new Set([...(product.specificationWarnings??[]),...job.result!.warnings])].slice(0,30),model:{state:'ready',appearance:'ai-generated',jobId:job.id,remoteAssetId:job.result!.assetId,...(localAssetId?{localAssetId}:{}),draftRevision:product.revision}});
+}
 export function useProductStudio(roomId:string, roomName:string, notify:(message:string)=>void){
  const [products,setProducts]=useState<ProductDraft[]>([]),[operations,setOperations]=useState<OperationRecord[]>([]),[session,setSession]=useState<StudioSession|null>(null),[loaded,setLoaded]=useState(false),[storageNote,setStorageNote]=useState('');
+ const [pipelineSession,setPipelineSession]=useState<PipelineSession|null>(null),[pipelineJobs,setPipelineJobs]=useState<PipelineJob[]>([]);
+ const productsRef=useRef<ProductDraft[]>([]);productsRef.current=products;
+ const jobsRef=useRef<PipelineJob[]>([]);jobsRef.current=pipelineJobs;
+ const completing=useRef(new Set<string>()),finished=useRef(new Set<string>()),enqueueKeys=useRef(new Map<string,string>());
  const boot=useRef<Promise<StudioSession>|null>(null),alive=useRef(true),sessionRef=useRef<StudioSession>(PAUSED),context=useRef({roomId,roomName,notify});context.current={roomId,roomName,notify};
  const initialize=useCallback(()=>{
   if(boot.current)return boot.current;
@@ -26,7 +36,9 @@ export function useProductStudio(roomId:string, roomName:string, notify:(message
    sessionRef.current=current;setProductStorageScope(current.user?.id??'device');
    const local=await loadProductWorkspace();let remoteProducts:ProductDraft[]=[],remoteOperations:OperationRecord[]=[];
    if(current.user&&current.storageAvailable){const remote=await Promise.allSettled([listRemoteProducts(),listRemoteOperations()]);if(remote[0].status==='fulfilled')remoteProducts=remote[0].value;if(remote[1].status==='fulfilled')remoteOperations=remote[1].value;}
-   const hydrated=await hydrateProductImages(mergeProducts(remoteProducts,local.products));
+   let pending:ProductDraft|undefined;
+   if(current.user){try{const raw=sessionStorage.getItem('roomshift-pending-product-v1');if(raw){sessionStorage.removeItem('roomshift-pending-product-v1');const handoff=JSON.parse(raw);if(typeof handoff.savedAt==='number'&&Date.now()-handoff.savedAt>=0&&Date.now()-handoff.savedAt<3_600_000){pending=validateProductDraft(handoff.product);await saveProduct(pending);if(current.storageAvailable){try{await saveRemoteProduct(cloudDraft(pending));}catch{/* The authenticated device copy remains available. */}}}}}catch{/* Invalid or expired handoffs never enter an account. */}}
+   const hydrated=await hydrateProductImages(mergeProducts(remoteProducts,local.products,pending?[pending]:[]));
    if(alive.current){setSession(current);setProducts(old=>mergeProducts(hydrated,old));setOperations(old=>mergeOperations([...remoteOperations,...local.operations],old));setStorageNote(local.status.message??'');setLoaded(true);}
    return current;
   })().catch(()=>{if(alive.current){setSession(PAUSED);setLoaded(true);setStorageNote('Product storage is unavailable. Keep a copy of your files; this tab can still show your current work.');}return PAUSED;});
@@ -79,6 +91,61 @@ export function useProductStudio(roomId:string, roomName:string, notify:(message
   await record(createLocalOperation({roomId:product.roomId,productId:product.id,kind:'asset-download',name:'Restore saved 3D model',engine:'Private asset download and local GLB validation',startedAt,elapsedMs:performance.now()-start,bytes:blob.size}));
   return next;
  },[persist,record]);
- const generate=useCallback(async(product:ProductDraft)=>{const current=await initialize();await requestGeneration(product,current);},[initialize]);
- return {products,operations,session,loaded,storageNote,save:persist,record,resolve,addImage,importModel,prepareModel,generate};
+ const refreshPipeline=useCallback(async()=>{try{const availability=await getPipelineSession();if(alive.current)setPipelineSession(availability);return availability;}catch{const offline={enabled:false,online:false,remainingJobs:0,reason:'Model creation is temporarily unavailable. You can still import a model or try the dimensions.'};if(alive.current)setPipelineSession(offline);return offline;}},[]);
+ useEffect(()=>{void refreshPipeline();const timer=setInterval(()=>void refreshPipeline(),30_000);return()=>clearInterval(timer);},[refreshPipeline]);
+ const updateJob=useCallback((job:PipelineJob)=>{if(alive.current)setPipelineJobs(old=>[...old.filter(j=>j.id!==job.id),job]);},[]);
+ const finishJob=useCallback(async(job:PipelineJob)=>{
+  if(finished.current.has(job.id)||completing.current.has(job.id))return;
+  if(job.operations)for(const operation of job.operations)await record(operation);
+  const current=productsRef.current.find(p=>p.id===job.productId);
+  if(!current||current.roomId!==job.roomId||current.revision!==job.requestedRevision||current.model.jobId!==job.id){finished.current.add(job.id);return;}
+  if(job.status==='failed'||job.status==='cancelled'){
+   enqueueKeys.current.delete(`${job.productId}:${job.requestedRevision}`);
+   persist({...current,updatedAt:new Date().toISOString(),model:{state:'failed',appearance:'size-preview',draftRevision:current.revision,error:job.status==='cancelled'?'Model creation was cancelled.':job.error??'Model creation could not finish. You can try again.'}});
+   finished.current.add(job.id);context.current.notify(job.status==='cancelled'?'Model creation cancelled. Your product details were kept.':'Model creation needs attention. Open My products to retry.');return;
+  }
+  if(job.status!=='succeeded'||!job.result)return;
+  completing.current.add(job.id);
+  const startedAt=new Date().toISOString(),start=performance.now();
+  try{
+   const blob=await downloadAsset(job.result.assetId);
+   const local=await storeLocalModel(new File([blob],`${job.result.product.title.slice(0,70)||'product'}.glb`,{type:'model/gltf-binary'}));
+   const latest=productsRef.current.find(p=>p.id===job.productId);
+   if(!alive.current||latest?.revision!==job.requestedRevision||latest.model.jobId!==job.id){finished.current.add(job.id);return;}
+   const result=mergePipelineResult(job,latest,local.assetId);
+   persist(result);
+   await record({...createLocalOperation({roomId:job.roomId,roomName:context.current.roomName,productId:job.productId,kind:'asset-download',name:'Open and validate generated model',engine:'Private asset download and local GLB validation',startedAt,elapsedMs:performance.now()-start,bytes:blob.size}),parentId:job.id,outputAssetIds:[local.assetId]});
+   context.current.notify('Your 3D model is ready in My products. Review its dimensions before trying it.');finished.current.add(job.id);
+  }catch{
+   await record({...createLocalOperation({roomId:job.roomId,productId:job.productId,kind:'asset-download',name:'Open generated model',engine:'Private asset download and local GLB validation',startedAt,elapsedMs:performance.now()-start}),parentId:job.id,status:'failed',errorCode:'MODEL_DOWNLOAD'});
+   // Keep the private result retrievable. A later Try in room restores it through prepareModel.
+   const latest=productsRef.current.find(p=>p.id===job.productId);
+   if(alive.current&&latest?.revision===job.requestedRevision&&latest.model.jobId===job.id){persist(mergePipelineResult(job,latest));context.current.notify('Your model is saved. Open My products to load it again.');}
+   finished.current.add(job.id);
+  }finally{completing.current.delete(job.id);void refreshPipeline();}
+ },[persist,record,refreshPipeline]);
+ useEffect(()=>{
+  if(!loaded||!session?.user)return;
+  let stopped=false,polling=false;
+  const poll=async()=>{if(polling)return;polling=true;try{
+   const ids=[...new Set([...productsRef.current.filter(p=>p.model.jobId&&['queued','running'].includes(p.model.state)).map(p=>p.model.jobId!),...jobsRef.current.filter(j=>['queued','running'].includes(j.status)).map(j=>j.id)])];
+   for(const id of ids){if(stopped)break;try{const job=await getPipelineJob(id);if(stopped)break;updateJob(job);if(job.operations)for(const operation of job.operations)await record(operation);if(['succeeded','failed','cancelled'].includes(job.status))await finishJob(job);}catch{/* An interrupted connection does not resubmit a job or discard its progress. */}}
+  }finally{polling=false;}};
+  void poll();const timer=setInterval(()=>void poll(),2500);return()=>{stopped=true;clearInterval(timer);};
+ },[loaded,session?.user?.id,updateJob,record,finishJob]);
+ const generate=useCallback(async(product:ProductDraft)=>{
+  const current=await initialize();if(product.model.state==='ready'&&product.model.appearance==='ai-generated'&&product.model.draftRevision===product.revision)throw new Error('This product already has a model ready to review.');if(!current.user)throw new Error('Sign in to create a private 3D model. Your room and product draft stay here.');
+  const availability=await refreshPipeline();if(!availability.enabled||!availability.online)throw new Error(availability.reason??'The model studio is offline. Save this product and return when it is available.');
+  const existing=jobsRef.current.find(j=>j.productId===product.id&&['queued','running'].includes(j.status));if(existing)throw new Error('A model for this product is already being prepared.');
+  if(availability.remainingJobs<1)throw new Error('You’ve used today’s model allowance. Your saved products are ready for tomorrow.');
+  const key=`${product.id}:${product.revision}`;let idempotencyKey=enqueueKeys.current.get(key);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();enqueueKeys.current.set(key,idempotencyKey);}
+  const job=await createPipelineJob(cloudDraft(product),idempotencyKey);updateJob(job);
+  const queued={...product,updatedAt:new Date().toISOString(),model:{state:job.status==='running'?'running':'queued',appearance:'ai-generated',jobId:job.id,draftRevision:product.revision}} as ProductDraft;
+  persist(queued);if(job.operations)for(const operation of job.operations)await record(operation);
+  if(['failed','cancelled'].includes(job.status))enqueueKeys.current.delete(key);
+  if(['succeeded','failed','cancelled'].includes(job.status))setTimeout(()=>void finishJob(job),0);
+  void refreshPipeline();
+ },[initialize,refreshPipeline,updateJob,persist,record,finishJob]);
+ const cancelGeneration=useCallback(async(id:string)=>{const job=await cancelPipelineJob(id);updateJob(job);await finishJob(job);enqueueKeys.current.delete(`${job.productId}:${job.requestedRevision}`);void refreshPipeline();},[updateJob,finishJob,refreshPipeline]);
+ return {products,operations,session,loaded,storageNote,save:persist,record,resolve,addImage,importModel,prepareModel,generate,pipelineSession,pipelineJobs,cancelGeneration};
 }

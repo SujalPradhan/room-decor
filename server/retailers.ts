@@ -315,7 +315,7 @@ export function extractProductMetadata(
     }));
   let next: ProductDraft = {
     ...draft,
-    title: title || draft.title,
+    title: (title || draft.title).slice(0,100),
     images,
     selectedImageId: images[0]?.id,
   };

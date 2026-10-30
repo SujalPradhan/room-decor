@@ -21,7 +21,7 @@ obj.rotation_euler=(-math.pi/2,0,0)
 bpy.ops.object.transform_apply(location=False,rotation=True,scale=True)
 points=np.array([tuple(v.co) for v in obj.data.vertices])
 z=points[:,2];top=points[z>np.quantile(z,.8),:2].mean(axis=0);seat=points[(z>np.quantile(z,.2))&(z<np.quantile(z,.65)),:2].mean(axis=0)
-back=top-seat;heading=math.pi/2-math.atan2(float(back[1]),float(back[0])) if np.linalg.norm(back)>.05 else -math.pi/2
+back=top-seat;heading=math.pi/2-math.atan2(float(back[1]),float(back[0])) if product.get('kind')=='chair' and np.linalg.norm(back)>.05 else -math.pi/2
 obj.rotation_euler=(0,0,heading)
 bpy.ops.object.transform_apply(location=False,rotation=True,scale=True)
 raw_size=list(obj.dimensions)

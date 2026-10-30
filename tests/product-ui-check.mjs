@@ -22,7 +22,7 @@ try {
   await p
     .getByLabel("Amazon or Flipkart product link", { exact: true })
     .fill("https://www.amazon.in/dp/B012345678");
-  await p.getByRole("button", { name: "Read product", exact: true }).click();
+  await p.getByRole("button", { name: "Read product details only", exact: true }).click();
   await expect(
     p.getByRole("textbox", { name: "Product name", exact: true }),
   ).toHaveValue("Test oak desk");
@@ -59,7 +59,7 @@ try {
   await p
     .getByLabel("Amazon or Flipkart product link", { exact: true })
     .fill("https://www.amazon.in/failure");
-  await p.getByRole("button", { name: "Read product", exact: true }).click();
+  await p.getByRole("button", { name: "Read product details only", exact: true }).click();
   await expect(p.getByRole("alert")).toContainText("kept");
   await expect(
     p.getByRole("textbox", { name: "Product name", exact: true }),

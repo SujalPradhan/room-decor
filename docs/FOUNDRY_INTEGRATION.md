@@ -1,47 +1,51 @@
-# Foundry assessment for product-link reconstruction
+# Foundry integration for product-link reconstruction
 
-29 October 2026. Research only: no credentials used and no model/inference request made. Existing paid-generation controls remain disabled.
+Updated 30 October 2026 following authenticated localhost validation on 29 October. The laptop-worker integration is included in this release. The research history below predates token configuration.
 
-## Conclusion
+## Implemented role
 
-A Foundry token can power the interpretation stages of the existing URL-to-model pipeline. Keep the working retailer extractor, add vision-assisted evidence extraction/image selection, and keep TripoSR/Blender for actual geometry. Foundry's checked documentation does not describe an image-to-GLB endpoint. A token alone does not supply a public GPU/3D inference worker or establish model quality.
+Foundry interprets photographs and measurement evidence; local TripoSR and Blender produce the GLB. The checked Foundry documentation does not describe an image-to-GLB endpoint. An LLM token does not supply a GPU worker or establish reconstruction quality.
 
-## Documented capabilities and proposed roles
+The server-only adapter calls Foundry's Gemini REST route with `gemini-2.5-flash`, bounded product imagery, a response schema and a project tag. It selects a complete product photograph and crop, transcribes printed diagram measurements, distinguishes upright/reclined and outer/seat/part measurements, and compares these with listing facts. Local validation checks image IDs, units, dimensions and crop bounds. User-entered dimensions are retained; disagreements remain visible instead of silently becoming verified measurements.
 
-- Gemini/OpenAI routing: use an available vision-capable model to rank the actual gallery photos, identify the selected product/variant, read dimension diagrams, distinguish upright/reclined states and separate outer/seat/package measurements. This is a proposed integration; account model availability and output quality need authenticated validation.
-- JSON Schema: request dimensions with units, image IDs, bounding boxes, source evidence and uncertainties in a strict schema. Validate all fields locally, retain conflicts and missing values, and do not treat structured output as proof of accuracy.
-- Image editing: optional preparation if deterministic local segmentation is insufficient. Preserve product identity. Edited/generated views are inferred material, not additional measured evidence.
-- Markdown/Proxy: optional retrieval aids, not guaranteed retailer access. Keep our successful direct retrieval as the first path.
-- Usage reporting and project tags: identify this project in Foundry. Record the returned model, actual token usage, image count, latency and retry attempts in the existing ledger. Monetary rates must come from the account/provider route; mark estimates and reconcile against Foundry usage rather than assume direct-provider prices.
+The adapter restricts origins, rejects redirects, bounds responses and request duration, and uses fixed public error messages. Credentials are read by the local worker/analysis process; the browser, project exports and public reports do not receive them. The site needs the shared worker credential, not the Foundry key. Paid Meshy generation remains source-disabled.
 
-## Actual retrieval probe
+## Live validation: 29 October 2026
 
-Unauthenticated GET requests were made once each to the supplied demo host's Markdown and Proxy endpoints for the exact SNUZSPACE recliner URL. Markdown returned HTTP 200 containing `Fetch failed: HTTP 429: Too Many Requests`; Proxy returned HTTP 429. Neither produced usable product evidence. This does not mean model access will fail; it demonstrates that the webpage helpers do not solve this retailer's access restrictions from that server. Detect errors inside converter responses and retain the original working extractor.
+The supplied SNUZSPACE Flipkart recliner completed the real localhost queue → worker → Foundry → TripoSR → Blender → private model flow. This is one measured run, not a latency promise:
 
-## Intended architecture
+| Stage | Observed result |
+| --- | --- |
+| Full pipeline | 33.8345 seconds |
+| Foundry `gemini-2.5-flash` | 5.4367 seconds; 1,752 input tokens; 490 output tokens; 5 images |
+| TripoSR on M4 MPS | 14.459 seconds |
+| Blender conversion | 0.987 seconds |
+| Textured GLB | 2,944,940 bytes; 70,000 faces |
 
-URL → bounded direct extraction → Foundry vision/structured evidence → local foreground preparation → TripoSR mesh → Blender texture/orientation/scale validation → explicit room confirmation.
+The diagram states width **32.5 inches** (82.55 cm), while the listing states **83.56 cm**. The pipeline retains this conflict and marks the affected evidence for review. Neither value is independently measured. Hidden geometry, appearance and orientation remain inferred. Only this recliner has been validated with live reconstruction; other furniture categories and Amazon listings are best-effort and unbenchmarked.
 
-The public website needs a durable job and a reachable inference worker. A laptop worker can run our proven local engine while the Mac remains available; an always-on hosted worker is a separate deployment choice. A dedicated image-to-3D API is another option requiring its own credentials/authorization unless the account has a separately documented route. Foundry LLM/image access is not itself evidence of Meshy/Tripo access.
+## Metering and operation
 
-## Implementation sequence after token configuration
+**Cost & time** records the returned model, actual tokens, image count and observed elapsed time alongside local reconstruction/conversion operations. Monetary Foundry cost remains **unknown** until reconciled with account usage and pricing; direct-provider prices are not substituted. The mesh has no external 3D-generation API fee. Device, electricity and hosting/storage costs are unmetered.
 
-1. Check the token's own tenant, allowed models and authentication. Documentation examples use `llmfoundry.straive.com`, while the supplied help and our unauthenticated probes use `llmfoundry.straivedemo.com`. Keep the base URL explicit and validate the appropriate host before using the token; do not assume model names in older examples are current.
-2. Add a server-only Foundry adapter. The comparison repo already contains Gemini JSON, chat JSON and image-edit wrappers; reuse the pattern, not its unverified model defaults or token fallback/billing assumptions. Use a project token for public deployment as recommended by Foundry's production guide. Never expose the token in browser assets or project exports.
-3. Benchmark the existing recliner: choose the hero image, read both table and diagram dimensions and report the width discrepancy. No manual photo/specification input should be required when evidence is complete; only genuine ambiguity should prompt review.
-4. Log LLM work alongside reconstruction stage reports, with usage caps before submission. Existing instruction to keep paid generation disabled is not changed by this assessment; configuring a key is separate from approving billable tests.
-5. Connect the verified local pipeline to owner-scoped queued jobs. Preserve explicit preview/confirmation, one-step undo, account isolation, caching and stale-result protection. An LLM key alone does not implement this connection.
+Double-click **Start Roomshift Generator.command** to open the public studio and start the bounded worker. It invokes Node with `--env-file=../.env`, at most three jobs and one idle hour. Keep the Mac awake and the terminal open. Communication is outgoing-only; no inbound laptop port is opened. Model submission/private results require sign-in. The queue enforces daily limits, one active job per person, one reconstruction globally, cancellation and stale-result guards. See [the pipeline guide](AUTOMATIC_PRODUCT_PIPELINE.md).
+
+## Research history: earlier on 29 October 2026
+
+The original assessment occurred before credentials were configured and before model requests were made. It recommended retaining direct retailer extraction, adding Foundry vision/structured evidence, and using TripoSR/Blender for geometry. That architecture is now implemented and locally validated. The earlier claim “no credentials used and no model/inference request made” applies only to that initial research pass.
+
+Unauthenticated GET probes were made once each to the demo host's Markdown and Proxy endpoints for the exact recliner URL. Markdown returned HTTP 200 containing `Fetch failed: HTTP 429: Too Many Requests`; Proxy returned HTTP 429. Neither supplied usable product evidence. These probes showed that the helpers did not solve this retailer's access restriction from that server; they did not establish model access. Direct bounded retrieval remains the implemented path. Image editing and alternate retrieval routes were researched but are not required by this pilot.
 
 ## Sources checked
 
-- Help/provider index: https://llmfoundry.straivedemo.com/help/
-- Gemini route: https://llmfoundry.straivedemo.com/help/gemini
-- OpenAI route: https://llmfoundry.straivedemo.com/help/openai
-- Structured output: https://llmfoundry.straivedemo.com/help/json
-- Image editing: https://llmfoundry.straivedemo.com/help/draw
-- Markdown: https://llmfoundry.straivedemo.com/help/markdown
-- Proxy: https://llmfoundry.straivedemo.com/help/proxy
-- Production/project tokens: https://llmfoundry.straivedemo.com/help/production
-- Cost reporting: https://llmfoundry.straivedemo.com/help/cost
+- [Help/provider index](https://llmfoundry.straivedemo.com/help/)
+- [Gemini route](https://llmfoundry.straivedemo.com/help/gemini)
+- [OpenAI route](https://llmfoundry.straivedemo.com/help/openai)
+- [Structured output](https://llmfoundry.straivedemo.com/help/json)
+- [Image editing](https://llmfoundry.straivedemo.com/help/draw)
+- [Markdown](https://llmfoundry.straivedemo.com/help/markdown)
+- [Proxy](https://llmfoundry.straivedemo.com/help/proxy)
+- [Production/project tokens](https://llmfoundry.straivedemo.com/help/production)
+- [Cost reporting](https://llmfoundry.straivedemo.com/help/cost)
 
-Pages were retrieved directly over HTTPS because the browsing index could not open this host. Generic provider/model claims in documentation have not been treated as verified access for this user's token.
+Documentation was retrieved directly over HTTPS during research because the browsing index could not open this host. Documented model names alone were not treated as verified account access; the authenticated Gemini run above supplies the actual validation.

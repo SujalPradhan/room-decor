@@ -27,6 +27,8 @@ export interface StudioEnv {
   BUCKET?: Bucket;
   MESHY_API_KEY?: string;
   STUDIO_PAID_GENERATION_ENABLED?: string;
+  STUDIO_LOCAL_PIPELINE_ENABLED?: string;
+  ROOMSHIFT_WORKER_TOKEN?: string;
 }
 export interface RequestContext {
   waitUntil(promise: Promise<unknown>): void;

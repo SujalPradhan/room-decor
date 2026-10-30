@@ -1,3 +1,4 @@
+import { handlePipelineRequest } from "./local-pipeline";
 import type {
   OperationRecord,
   ProductDraft,
@@ -545,6 +546,8 @@ export async function handleStudioRequest(
     sameOrigin(request);
     const url = new URL(request.url),
       path = url.pathname.replace(/\/$/, "");
+    if (path.startsWith("/api/pipeline/"))
+      return await handlePipelineRequest(request, env, { ownerOf, readJson, json });
     if (path === "/api/studio/session" && request.method === "GET")
       return await session(request, env);
     if (path === "/api/products/resolve" && request.method === "POST")

@@ -2,13 +2,13 @@
 import os,sys,time,json,types,argparse,pathlib,subprocess
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK','1')
 os.environ['HF_HUB_DISABLE_IMPLICIT_TOKEN']='1'
-p=argparse.ArgumentParser();p.add_argument('--input',required=True);p.add_argument('--output',required=True);p.add_argument('--source',default='.local-3d/TripoSR');p.add_argument('--device',choices=['mps','cpu'],default='mps');p.add_argument('--resolution',type=int,default=256);args=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--input',required=True);p.add_argument('--output',required=True);p.add_argument('--source',default='.local-3d/TripoSR');p.add_argument('--device',choices=['mps','cpu'],default='mps');p.add_argument('--resolution',type=int,default=256);p.add_argument('--crop',nargs=4,type=float);args=p.parse_args()
 root=pathlib.Path(args.output);root.mkdir(parents=True,exist_ok=True)
 start=time.monotonic();stages=[]
 def stage(name,t):
  elapsed=time.monotonic()-t;stages.append({'stage':name,'seconds':round(elapsed,3)});print(name,round(elapsed,2),'s',flush=True)
 import torch,numpy as np
-from PIL import Image
+from PIL import Image,ImageOps
 from skimage.measure import marching_cubes
 # CPU marching-cubes compatibility shim: skimage indices are x/y/z in this
 # field. Upstream torchmcubes is returned in z/y/x order then reversed by TSR.
@@ -22,7 +22,16 @@ from tsr.system import TSR
 from tsr.utils import resize_foreground
 import rembg
 print('Device',args.device,'MPS available',torch.backends.mps.is_available(),flush=True)
-t=time.monotonic();image=Image.open(args.input).convert('RGB');image.thumbnail((1024,1024));session=rembg.new_session('u2netp',providers=['CPUExecutionProvider']);cut=rembg.remove(image,session=session);cut.save(root/'segmented.png');processed=resize_foreground(cut,.85);processed.save(root/'input.png');rgba=np.array(processed).astype(np.float32)/255;image=Image.fromarray((255*(rgba[:,:,:3]*rgba[:,:,3:]+.5*(1-rgba[:,:,3:]))).astype(np.uint8));stage('image-preparation',t)
+print('ROOMSHIFT_STAGE '+json.dumps({'stage':'preparing'}),flush=True)
+t=time.monotonic();image=ImageOps.exif_transpose(Image.open(args.input)).convert('RGB')
+if args.crop:
+ left,top,right,bottom=args.crop
+ if not(0<=left<right<=1 and 0<=top<bottom<=1 and right-left>=.1 and bottom-top>=.1):raise ValueError('The product crop is invalid.')
+ # Small padding avoids cutting off feet at the inferred bounding edge.
+ left=max(0,left-.015);top=max(0,top-.015);right=min(1,right+.015);bottom=min(1,bottom+.015)
+ image=image.crop((int(left*image.width),int(top*image.height),int(right*image.width),int(bottom*image.height)))
+image.thumbnail((1024,1024));session=rembg.new_session('u2netp',providers=['CPUExecutionProvider']);cut=rembg.remove(image,session=session);cut.save(root/'segmented.png');processed=resize_foreground(cut,.85);processed.save(root/'input.png');rgba=np.array(processed).astype(np.float32)/255;image=Image.fromarray((255*(rgba[:,:,:3]*rgba[:,:,3:]+.5*(1-rgba[:,:,3:]))).astype(np.uint8));stage('image-preparation',t)
+print('ROOMSHIFT_STAGE '+json.dumps({'stage':'reconstructing'}),flush=True)
 t=time.monotonic();model=TSR.from_pretrained('stabilityai/TripoSR',config_name='config.yaml',weight_name='model.ckpt');model.renderer.set_chunk_size(8192);model=model.to(args.device).eval();stage('load-model-and-weights',t)
 with torch.no_grad():
  t=time.monotonic();scene=model([image],device=args.device)

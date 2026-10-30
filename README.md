@@ -17,15 +17,15 @@ The launcher opens `http://127.0.0.1:5176` and keeps the local server in its ter
 
 ## Product links and processing history
 
-Choose **Add furniture → Try a product link**, or select an existing piece and choose **Have a product link?** Paste an Amazon India or Flipkart link, or paste specifications when the page cannot be read. Review the category, variant and three outer dimensions. Unknown measurements remain blank; check all three before trying the size. The preview uses approximate furniture geometry unless you import a detailed GLB. Confirm to make one undoable layout change. **My products** keeps drafts for later.
+Choose **Add furniture → Try a product link**, or select an existing piece and choose **Have a product link?** Paste an Amazon India or Flipkart link and select **Create model**. The implemented laptop-worker pilot collects photos and dimensions, reviews image evidence with Foundry, and reconstructs an approximate textured GLB using local TripoSR and Blender. Processing starts without manual dimension confirmation. **My products** retains the draft, progress and output. Review the dimensions before trying it in the room; placement requires explicit confirmation and creates one undoable layout change. Manual specifications, photo uploads and GLB imports remain recovery options.
 
-**Cost & time** records newly instrumented work, elapsed/stage time, engine/provider/model, credit usage and cost basis, with filters and CSV export. Existing assets have no reconstructed billing history. Browser work is stored on this device; signed-in server lookups/uploads are stored in your account. Local work means no external inference charge; hosting and device resource costs are not metered.
+**Cost & time** records instrumented work, actual returned tokens, image count, engine/provider/model and observed stage/elapsed times, with filters and CSV export. Foundry monetary cost remains **unknown** until reconciled against account usage and pricing. Existing assets have no reconstructed billing history. Local 3D reconstruction has no external 3D API fee; device, electricity and hosting/storage costs are unmetered.
 
-**Paid generation is disabled**, including at the server. No API key is required for the available workflows. The provider adapter is mock-tested; no live generation or provider billing has been validated.
+**Paid Meshy generation remains source-disabled**, including at the server. Foundry evidence review uses the configured LLM account token and may incur account charges. No direct-provider price is assumed. The public app supports device-local editing without an account; sign in for the private product library, uploads, model queue and results. Room layouts remain device-local, and product/cost history is separate from layout undo. Keep original GLBs when transferring projects between browsers.
 
-The public app works without an account for local editing. Sign in through the account icon for a private online product library and uploads. Room layouts remain device-local. Project exports contain asset IDs; keep your GLB originals. Product drafts and cost history are stored separately from layout undo.
+Double-click **Start Roomshift Generator.command** on the configured Mac to open the public studio and start its outgoing-only worker. Keep the Mac awake and its terminal open; Ctrl+C stops it. The launcher stops after three jobs or one idle hour. There is no inbound laptop port. Foundry credentials stay on the Mac; the site needs only the shared worker credential for this pipeline alongside private job/asset storage. Server limits allow one active job per person, three attempts per person and six globally per UTC day, and one running reconstruction globally. Failed/cancelled attempts count. Cancellation, leases and product revision checks protect against stale results.
 
-A separate [local link-to-model experiment](docs/RECLINER_EXPERIMENT.md) demonstrates this Flipkart recliner with TripoSR on the M4 Mac, without an API key. It produces an inferred textured GLB; it is not yet a public background generation service.
+On 29 October 2026, a real localhost end-to-end run of the supplied Flipkart recliner completed in 33.83 seconds, including Foundry and local 3D processing. This release connects the public studio to the configured laptop worker. Only this recliner has been validated with live reconstruction; Amazon links and other categories are best-effort and unbenchmarked. [Pipeline and limits](docs/AUTOMATIC_PRODUCT_PIPELINE.md), [Foundry evidence/metering](docs/FOUNDRY_INTEGRATION.md), [local setup and quality limits](docs/RECLINER_EXPERIMENT.md).
 
 ## Replace a piece
 
@@ -67,7 +67,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-For the development server on 5174:
+For the development server on 5176:
 
 ```sh
 ROOMSHIFT_BASE_URL=http://127.0.0.1:5176 npm run test:e2e
@@ -77,8 +77,8 @@ The Blender rebuild validates 14 roots, portable maps, UVs, normalized bounds an
 
 The interface follows the visual direction of [Dream Room](https://github.com/Jivraj-18/dream-room-blender); application code and furniture are independently authored. Runtime dependencies include React, Three.js and Lucide under their respective open-source licenses. Generic Poly Haven maps are CC0; authored materials are recorded with the assets.
 
-## Stable checkpoint and proposed next work
+## Stable checkpoint and product-link work
 
 [PR #7](https://github.com/SujalPradhan/room-decor/pull/7) merged the current realistic editor into `main`. The annotated tag [`roomshift-stable-2026-10-28`](https://github.com/SujalPradhan/room-decor/tree/roomshift-stable-2026-10-28) preserves the application deployed as public version 3 (source commit `e422ba5`). Retain the tag when implementing later features.
 
-The proposed next release adds product-link intake, reviewed product dimensions, detailed model generation, and a Cost & time tab. Implementation awaits plan review. [Full proposal](docs/PRODUCT_LINK_PLAN.md), [tracking issue #8](https://github.com/SujalPradhan/room-decor/issues/8).
+Product-link intake, reviewed dimensions, My products and Cost & time are implemented. The laptop-worker model pilot is implemented and locally validated. [Original proposal](docs/PRODUCT_LINK_PLAN.md), [current pipeline](docs/AUTOMATIC_PRODUCT_PIPELINE.md), [tracking issue #8](https://github.com/SujalPradhan/room-decor/issues/8).

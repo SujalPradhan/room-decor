@@ -1520,7 +1520,7 @@ export default function App() {
           </button>
         </div>
       )}
-      {productOpen && <ProductWorkbench storageNote={studio.storageNote} original={productTarget} initialProductId={initialProductId} roomId={project.id!} roomName={project.name ?? "My bedroom"} products={studio.products} session={studio.session} onResolve={studio.resolve} onSave={studio.save} onTry={tryProduct} onClose={() => setProductOpen(false)} onImportModel={studio.importModel} onAddImage={studio.addImage} onGenerate={studio.generate}/>}
+      {productOpen && <ProductWorkbench pipelineSession={studio.pipelineSession} pipelineJobs={studio.pipelineJobs} onCancelGeneration={studio.cancelGeneration} storageNote={studio.storageNote} original={productTarget} initialProductId={initialProductId} roomId={project.id!} roomName={project.name ?? "My bedroom"} products={studio.products} session={studio.session} onResolve={studio.resolve} onSave={studio.save} onTry={tryProduct} onClose={() => setProductOpen(false)} onImportModel={studio.importModel} onAddImage={studio.addImage} onGenerate={studio.generate}/>}
       {costOpen && <CostTimePanel storageNote={studio.storageNote} operations={studio.operations} products={studio.products} roomId={project.id!} roomName={project.name ?? "My bedroom"} onClose={() => setCostOpen(false)}/>}
       {modal && (
         <div

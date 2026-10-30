@@ -1,5 +1,7 @@
 # Flipkart recliner: local link-to-model experiment
 
+This records the original keyless experiment. The current worker optionally adds Foundry vision review when configured; that review can incur LLM charges and automatically flags diagram/table conflicts. See [current integration](FOUNDRY_INTEGRATION.md). Set `ROOMSHIFT_USE_FOUNDRY=false` to reproduce the keyless route.
+
 Source: https://www.flipkart.com/snuzspace-fabric-manual-recliner/p/itmcbf4f034af5ba?pid=RECHK8KJZEVZWK37
 
 The experiment uses accessible listing data and public local model weights. It does not enable Meshy, submit a paid job, or modify a user's room layout. It is a local feasibility experiment, not a publicly hosted generation backend.
