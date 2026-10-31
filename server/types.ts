@@ -1,0 +1,53 @@
+/** Minimal structural bindings let the service be tested without a Workers runtime. */
+export interface Statement {
+  bind(...values: unknown[]): Statement;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
+  run(): Promise<{ success?: boolean; meta?: { changes?: number } }>;
+}
+export interface Database {
+  prepare(sql: string): Statement;
+  batch<T = unknown>(statements: Statement[]): Promise<T[]>;
+}
+export interface StoredObject {
+  body: ReadableStream<Uint8Array>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+export interface Bucket {
+  put(
+    key: string,
+    value: ArrayBuffer | Uint8Array | ReadableStream,
+    options?: { httpMetadata?: { contentType?: string } },
+  ): Promise<unknown>;
+  get(key: string): Promise<StoredObject | null>;
+  delete(key: string): Promise<unknown>;
+}
+export interface StudioEnv {
+  DB?: Database;
+  BUCKET?: Bucket;
+  MESHY_API_KEY?: string;
+  STUDIO_PAID_GENERATION_ENABLED?: string;
+  STUDIO_LOCAL_PIPELINE_ENABLED?: string;
+  ROOMSHIFT_WORKER_TOKEN?: string;
+  STUDIO_LAYOUT_AGENT_ENABLED?: string;
+  STUDIO_LAYOUT_AGENT_PUBLIC?: string;
+  LAYOUT_AGENT_BUDGET?: { idFromName(name: string): unknown; get(id: never): { fetch(url: string): Promise<Response> } };
+  FOUNDRY_API_KEY?: string;
+  AIPIPE_API_KEY?: string;
+  LAYOUT_AGENT_FOUNDRY_MODEL?: string;
+  LAYOUT_AGENT_AIPIPE_MODEL?: string;
+}
+export interface RequestContext {
+  waitUntil(promise: Promise<unknown>): void;
+}
+export class StudioError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+export const PAUSED_MESSAGE =
+  "Detailed AI generation is paused. You can try dimensions or import a 3D model.";

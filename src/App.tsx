@@ -6,6 +6,9 @@ import {
   BedDouble,
   Box,
   Camera,
+  Clock3,
+  Link2,
+  UserRound,
   Check,
   ChevronDown,
   ChevronRight,
@@ -56,6 +59,7 @@ import {
   createFurnitureItem,
   createInitialProject,
   parseProject,
+  upgradeRetiredPresets,
   serializeProject,
   validateLayout,
 } from "./domain";
@@ -64,6 +68,21 @@ import ReplacementPanel from "./ReplacementPanel";
 import { createReplacementDraft, previewReplacement } from "./replacement";
 import { getLocalModel } from "./local-assets";
 import DimensionInput from "./DimensionInput";
+import ProductWorkbench from "./ProductWorkbench";
+import CostTimePanel from "./CostTimePanel";
+import ProductPreviewPanel from "./ProductPreviewPanel";
+import LayoutExplainerPanel from "./LayoutExplainerPanel";
+import LayoutAgentComposer,{type LayoutAgentReply} from "./LayoutAgentComposer";
+import {useLayoutWalkthrough} from "./useLayoutWalkthrough";
+import {matchLayoutIntent} from "./layout-intent";
+import type {LayoutAgentResult} from "./layout-agent-types";
+import {readLayoutAgentResult} from "./layout-agent-client";
+import {studioRequest} from "./product-client";
+import { useProductStudio } from "./useProductStudio";
+import { productToFurniture, generatedProductToFurniture, isSafeProductImageUrl } from "./product-domain";
+import { chooseProductPosition, readPlacementIntents, type ProductPlacementIntent } from "./automatic-products";
+import { createLocalOperation } from "./ledger";
+import type { ProductDraft } from "./product-types";
 import {
   DIMENSION_LIMITS,
   toDisplayUnits,
@@ -115,12 +134,13 @@ type Modal = "catalog" | "room" | "references" | "help" | "save" | null;
 function clone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x));
 }
-function initialProject() {
+function initialProject(): Project {
+  const identify = (p: Project): Project => ({ ...p, id: p.id ?? crypto.randomUUID(), name: p.name ?? "My bedroom" });
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return parseProject(saved);
+    if (saved) return identify(upgradeRetiredPresets(parseProject(saved)));
   } catch {}
-  return createInitialProject();
+  return identify(createInitialProject());
 }
 function downloadFile(name: string, text: string, type = "application/json") {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -208,6 +228,16 @@ function MiniPlan({ layout, project }: { layout: Layout; project: Project }) {
 }
 
 export default function App() {
+  const layoutFrame=useRef<{layout:Layout;itemId?:string}|null>(null),sceneBase=useRef<SceneState|null>(null);
+  const [productOpen, setProductOpen] = useState(false), [costOpen, setCostOpen] = useState(false);
+  const [productTarget, setProductTarget] = useState<FurnitureItem | null>(null), [initialProductId, setInitialProductId] = useState<string | undefined>();
+  const [autoStartProduct,setAutoStartProduct]=useState(false);
+  const [placementTick,setPlacementTick]=useState(0);
+  const sourceVersion=useRef(0),activeProductRequest=useRef<AbortController|null>(null);
+  const autoIntents=useRef(new Map<string,ProductPlacementIntent>()),placementScope=useRef(''),activeAutoIntent=useRef<string|null>(null),placing=useRef(new Set<string>()),placementRetries=useRef(new Map<string,number>()),pendingCancellation=useRef<Promise<unknown>>(Promise.resolve()),appAlive=useRef(true),placementTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());
+  useEffect(()=>{appAlive.current=true;return()=>{appAlive.current=false;for(const timer of placementTimers.current.values())clearTimeout(timer);};},[]);
+  const [productPreview, setProductPreview] = useState<{ product: ProductDraft; candidate: FurnitureItem; originalId: string | null; layoutId: string } | null>(null);
+  const sceneStarted = useRef(performance.now()), sceneFinished = useRef<number | null>(null), meteredScene = useRef(false);
   const [replacementDraft, setReplacementDraft] =
       useState<FurnitureItem | null>(null),
     [showReplacement, setShowReplacement] = useState(true),
@@ -258,6 +288,30 @@ export default function App() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 4000);
   }, []);
+  const studio = useProductStudio(project.id!, project.name ?? "My bedroom", notify);
+  useEffect(() => {
+    if (!ready || !studio.loaded || meteredScene.current || sceneFinished.current === null) return;
+    meteredScene.current = true;
+    const duration = sceneFinished.current - sceneStarted.current;
+    void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name ?? "My bedroom", kind: "render", name: "Open room scene", engine: "Three.js browser renderer", startedAt: new Date(Date.now() - duration).toISOString(), elapsedMs: duration }));
+  }, [ready, studio.loaded, studio.record, project.id, project.name]);
+  const selectedProduct=studio.products.find(p=>p.id===selected?.productId);
+  const selectedPhoto=selectedProduct?.images.find(i=>i.id===selectedProduct.selectedImageId)??selectedProduct?.images[0];
+  const selectedProductPhoto=selectedPhoto&&isSafeProductImageUrl(selectedPhoto.url)?selectedPhoto.url:undefined;
+  const openProducts = (target: FurnitureItem | null, productId?: string) => {
+    if (target?.locked) { notify("Unlock this piece before trying a product."); return; }
+    setAutoStartProduct(false);setProductTarget(target ? clone(target) : null); setInitialProductId(productId); setProductOpen(true); setCostOpen(false); setModal(null); setExportOpen(false); setMode("orbit"); setMobilePanel(null);
+  };
+  const tryProduct = async (product: ProductDraft) => {
+    try {
+      if (productTarget && (!layout.items.some(i => i.id === productTarget.id) || layout.items.find(i => i.id === productTarget.id)?.locked)) throw new Error("This piece changed. Close the product panel and select it again.");
+      const original = productTarget ? layout.items.find(i => i.id === productTarget.id)! : null;
+      product = await studio.prepareModel(product);
+      const candidate = productToFurniture(product, original);
+      if (!original) candidate.position = { x: 0, z: Math.min(project.room.depth / 2 - candidate.dimensions.depth / 2, 1) };
+      studio.save(product); setProductPreview({ product: clone(product), candidate, originalId: original?.id ?? null, layoutId: layout.id }); setShowReplacement(true); setReplacementDraft(null); setProductOpen(false); setTab("object"); setMobilePanel("properties");
+    } catch (error) { notify(error instanceof Error ? error.message : "This product could not be previewed."); }
+  };
   const commit = useCallback(
     (mutate: (p: Project) => void) => {
       const current = projectRef.current,
@@ -279,6 +333,81 @@ export default function App() {
     },
     [notify],
   );
+  const agentLayout=useRef<Layout|null>(null);
+  const clearAsked=()=>{if(walkthrough.current.current?.plan.request)setLayoutRequest('');};
+  const walkthrough=useLayoutWalkthrough((next,itemId)=>{
+    layoutFrame.current=next?{layout:next,itemId}:null;
+    const base=sceneBase.current,current=projectRef.current;
+    if(base)controller.current?.update({...base,room:current.room,layout:next??current.layouts.find(l=>l.id===current.activeLayoutId)!,selectedId:next?itemId??null:null,presentation:Boolean(next),showClearances:next?false:base.showClearances,mode:base.mode==='walk'&&next?'orbit':base.mode});
+  },targetId=>{
+    const current=projectRef.current,proposed=agentLayout.current?.id===targetId?agentLayout.current:null;
+    if(proposed){
+      if(current.layouts.length>=12){notify('This project has 12 layouts. Delete one, then ask again.');return false;}
+      const accepted=commit(p=>{p.layouts.push(structuredClone(proposed));p.activeLayoutId=proposed.id;});
+      if(accepted){agentLayout.current=null;clearAsked();notify('Layout saved. Undo returns to the previous layout.');}
+      return accepted;
+    }
+    if(!current.layouts.some(l=>l.id===targetId)){notify('That saved layout is no longer available.');return false;}
+    if(current.activeLayoutId===targetId)return true;
+    const accepted=commit(p=>{p.activeLayoutId=targetId;});
+    if(accepted){clearAsked();notify('Layout switched. Undo returns to the previous layout.');}
+    return accepted;
+  });
+  const presenting=Boolean(walkthrough.view&&!walkthrough.view.finished);
+  const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState<LayoutAgentReply|null>(null),agentInput=useRef<HTMLInputElement>(null),[agentBusy,setAgentBusy]=useState(false);
+  const agentAbort=useRef<AbortController|null>(null),movedOn=useRef(false);
+  const startPreset=(targetId:string,request?:string,byAgent=false)=>{
+    const current=projectRef.current,target=current.layouts.find(l=>l.id===targetId);
+    if(!target||(!presenting&&current.activeLayoutId===targetId))return;
+    if(presenting&&walkthrough.view?.plan.toId===targetId)return;
+    const snapshot=walkthrough.snapshot(),from=snapshot&&presenting?{...snapshot,id:'current-view',name:'Current view'}:current.layouts.find(l=>l.id===current.activeLayoutId)!;
+    setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
+    walkthrough.start(from,target,current.room,request,undefined,byAgent);
+  };
+  const useRules=(request:string,note='Keyword rules')=>{
+    const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room);
+    setLayoutReply({text:match.reply,meta:note});
+    if(match.targetId)startPreset(match.targetId,request);
+  };
+  const stopAgent=()=>{agentAbort.current?.abort();agentAbort.current=null;setAgentBusy(false);};
+  const cancelWalkthrough=()=>{if(!walkthrough.current.current?.completed)setLayoutReply(null);walkthrough.close();};
+  const askLayout=async(text:string)=>{
+    const request=text.trim(),asked=projectRef.current;
+    if(!request||agentBusy||presenting)return;
+    if(asked.layouts.length>=12){useRules(request,'12 layouts reached · delete one to use the agent');return;}
+    if(walkthrough.view)walkthrough.close();
+    const controller=new AbortController();agentAbort.current=controller;
+    setAgentBusy(true);setLayoutReply(null);
+    const stale=()=>movedOn.current||projectRef.current!==asked;
+    const movedAway=()=>setLayoutReply({text:'You moved on while the agent was working, so nothing changed. Ask again when you are ready.'});
+    let result:LayoutAgentResult;
+    try{
+      const reply=await studioRequest<unknown>('/api/layout-agent',{method:'POST',body:JSON.stringify({request,project:asked}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(70000)])});
+      result=readLayoutAgentResult(reply,asked);
+    }catch{
+      if(controller.signal.aborted)return;
+      setAgentBusy(false);
+      if(stale())movedAway();else useRules(request,'Agent unavailable · keyword rules');
+      return;
+    }
+    if(controller.signal.aborted)return;
+    setAgentBusy(false);
+    if(stale()){movedAway();return;}
+    const current=projectRef.current,from=current.layouts.find(l=>l.id===current.activeLayoutId)!;
+    setLayoutReply({text:result.reply,meta:`${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`});
+    if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request,true);
+    if(result.action==='rearrange'){
+      agentLayout.current=result.layout;
+      setSelectedId(null);setMobilePanel(null);setExportOpen(false);
+      walkthrough.start(from,result.layout,current.room,request,result.reasons,true);
+    }
+  };
+  const deleteLayout=(id:string)=>{
+    const target=projectRef.current.layouts.find(l=>l.id===id);
+    if(!target||id==='original'||presenting)return;
+    walkthrough.close();setReplacementDraft(null);setProductPreview(null);setSelectedId(null);setLayoutReply(null);
+    if(commit(p=>{p.layouts=p.layouts.filter(l=>l.id!==id);if(p.activeLayoutId===id)p.activeLayoutId=p.layouts[0].id;}))notify(`${target.name} deleted. Undo brings it back.`);
+  };
   const editLayout = useCallback(
     (mutate: (l: Layout) => void) =>
       commit((p) => {
@@ -302,6 +431,80 @@ export default function App() {
       }),
     [commit, notify],
   );
+  const placementKey=studio.session?.user ? `roomshift-auto-products:${studio.session.user.id}:${project.id}` : '';
+  const saveIntents=()=>{if(placementKey)try{localStorage.setItem(placementKey,JSON.stringify([...autoIntents.current.values()]));}catch{/* Current-tab placement remains available. */}};
+  useEffect(()=>{
+    if(!studio.loaded||!placementKey||placementScope.current===placementKey)return;
+    placementScope.current=placementKey;autoIntents.current=new Map(readPlacementIntents(placementKey,project.id!).map(i=>[i.id,i]));setPlacementTick(n=>n+1);
+  },[studio.loaded,placementKey,project.id]);
+  useEffect(()=>{
+    if(!studio.loaded||!studio.pendingAutoProductId||!studio.products.some(p=>p.id===studio.pendingAutoProductId))return;
+    openProducts(null,studio.pendingAutoProductId);setAutoStartProduct(true);studio.clearPendingAutoProduct();
+  },[studio.pendingAutoProductId,studio.loaded,studio.products]);
+  const changeProductSource=()=>{
+    sourceVersion.current++;activeProductRequest.current?.abort();
+    const id=activeAutoIntent.current,intent=id?autoIntents.current.get(id):undefined;
+    if(!intent)return;
+    autoIntents.current.delete(intent.id);activeAutoIntent.current=null;saveIntents();
+    const running=studio.pipelineJobs.find(j=>j.productId===intent.productId&&['queued','running'].includes(j.status));
+    if(running)pendingCancellation.current=studio.cancelGeneration(running.id).catch(()=>undefined);
+    setPlacementTick(n=>n+1);
+  };
+  const generateProduct=async(product:ProductDraft)=>{
+    const source=sourceVersion.current,request=new AbortController();activeProductRequest.current=request;
+    await pendingCancellation.current;if(source!==sourceVersion.current)return;
+    const current=projectRef.current,target=current.layouts.find(l=>l.id===current.activeLayoutId),original=target?.items.find(i=>i.id===productTarget?.id);
+    if(product.roomId!==current.id)product={...product,id:crypto.randomUUID(),roomId:current.id!,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    for(const previous of autoIntents.current.values())if(previous.productId===product.id)autoIntents.current.delete(previous.id);
+    if(!target)throw Error('The target room is unavailable.');
+    const intent:ProductPlacementIntent={id:crypto.randomUUID(),productId:product.id,revision:product.revision,roomId:current.id!,layoutId:target.id,targetId:original?.id??null,...(original?{targetFingerprint:JSON.stringify(original)}:{}),createdAt:Date.now()};
+    autoIntents.current.set(intent.id,intent);activeAutoIntent.current=intent.id;saveIntents();setPlacementTick(n=>n+1);
+    try{await studio.generate(product,request.signal);}catch(error){autoIntents.current.delete(intent.id);saveIntents();throw error;}
+  };
+  useEffect(()=>{
+    if(!studio.loaded||!placementKey||placementScope.current!==placementKey)return;
+    for(const intent of autoIntents.current.values()){
+      const product=studio.products.find(p=>p.id===intent.productId);
+      if(product&&(product.model.state==='failed'||(product.revision!==intent.revision&&product.model.state!=='ready'))){autoIntents.current.delete(intent.id);saveIntents();continue;}
+      if(!product||product.model.state!=='ready'||product.model.appearance!=='ai-generated'||placing.current.has(intent.id)||placementTimers.current.has(intent.id))continue;
+      const job=studio.pipelineJobs.find(j=>j.productId===product.id&&j.requestedRevision===intent.revision);
+      if(product.revision!==intent.revision&&job?.status!=='succeeded'){autoIntents.current.delete(intent.id);saveIntents();continue;}
+      placing.current.add(intent.id);
+      void(async()=>{
+        try{
+          const prepared=await studio.prepareModel(product);
+          if(!appAlive.current||!autoIntents.current.has(intent.id)||placementScope.current!==placementKey)return;
+          const current=projectRef.current,target=current.layouts.find(l=>l.id===intent.layoutId);
+          if(!target||current.id!==intent.roomId){autoIntents.current.delete(intent.id);saveIntents();return;}
+          const original=intent.targetId?target.items.find(i=>i.id===intent.targetId):undefined;
+          const replace=original&&!original.locked&&JSON.stringify(original)===intent.targetFingerprint?original:null;
+          let candidate=generatedProductToFurniture(prepared,replace);
+          if(!candidate.assetId||!await getLocalModel(candidate.assetId))throw Error('The generated model is temporarily unavailable.');
+          if(!appAlive.current||!autoIntents.current.has(intent.id)||placementScope.current!==placementKey)return;
+          if(!replace){candidate.id=`product-${intent.id}`;candidate=chooseProductPosition(candidate,target,current.room);}
+          const accepted=commit(p=>{
+            let destination=p.layouts.find(l=>l.id===intent.layoutId);if(!destination)throw Error('The destination layout changed.');
+            if(destination.id==='original'){
+              if(p.layouts.length>=12)throw Error('The model is saved in My products. Your room has reached its layout limit.');
+              destination={...clone(destination),id:`layout-${intent.id}`,name:'My layout',description:'A new piece, automatically added'};p.layouts.push(destination);if(p.activeLayoutId===intent.layoutId)p.activeLayoutId=destination.id;
+            }
+            if(destination.items.some(i=>i.id===candidate.id&&i.assetId===candidate.assetId))return;
+            if(replace)destination.items=destination.items.map(i=>i.id===replace.id?clone(candidate):i);else destination.items.push(clone(candidate));
+          });
+          if(!accepted){autoIntents.current.delete(intent.id);saveIntents();return;}
+          // Persist the room before consuming the intent, preventing duplicate additions on reload.
+          try{localStorage.setItem(STORAGE_KEY,serializeProject(projectRef.current));}catch{}
+          autoIntents.current.delete(intent.id);saveIntents();placementRetries.current.delete(intent.id);
+          setSelectedId(candidate.id);setProductOpen(false);setProductPreview(null);setReplacementDraft(null);setTab('object');setMode('orbit');setMobilePanel(null);
+          requestAnimationFrame(()=>controller.current?.focusItem?.(candidate.id));notify('Product added to your room. Undo removes this change.');
+        }catch(error){
+          const attempts=(placementRetries.current.get(intent.id)??0)+1;placementRetries.current.set(intent.id,attempts);
+          if(attempts<3&&appAlive.current){const timer=setTimeout(()=>{placementTimers.current.delete(intent.id);setPlacementTick(n=>n+1);},attempts*2500);placementTimers.current.set(intent.id,timer);}
+          else{autoIntents.current.delete(intent.id);saveIntents();notify(error instanceof Error?error.message:'The product model could not be loaded. Your room was kept.');}
+        }finally{placing.current.delete(intent.id);}
+      })();
+    }
+  },[studio.products,studio.pipelineJobs,studio.loaded,placementKey,placementTick,commit]);
   const editItem = useCallback(
     (id: string, changes: Partial<FurnitureItem>) =>
       editLayout((l) => {
@@ -311,7 +514,7 @@ export default function App() {
     [editLayout],
   );
   const deleteSelected = useCallback(() => {
-    if (!selected || replacementDraft || modal) return;
+    if (!selected || replacementDraft || productPreview || productOpen || costOpen || modal) return;
     if (selected.locked) {
       notify("Unlock this piece before deleting it.");
       return;
@@ -325,19 +528,23 @@ export default function App() {
       setMobilePanel(null);
       notify(`${selected.name} deleted. Ctrl/⌘ Z restores it.`);
     }
-  }, [selected, replacementDraft, modal, editLayout, notify]);
+  }, [selected, replacementDraft, productPreview, productOpen, costOpen, modal, editLayout, notify]);
   const undo = useCallback(() => {
+    if(presenting){cancelWalkthrough();return;}
     if (!past.length) return;
+    walkthrough.close();setLayoutReply(null);
     setFuture((f) => [clone(project), ...f]);
     setProject(past[past.length - 1]);
     setPast((p) => p.slice(0, -1));
-  }, [past, project]);
+  }, [past, project,presenting]);
   const redo = useCallback(() => {
+    if(presenting){walkthrough.close();return;}
     if (!future.length) return;
+    walkthrough.close();
     setPast((p) => [...p, clone(project)]);
     setProject(future[0]);
     setFuture((f) => f.slice(1));
-  }, [future, project]);
+  }, [future, project,presenting]);
   useEffect(() => {
     const t = setTimeout(() => {
       try {
@@ -357,6 +564,15 @@ export default function App() {
         )
       )
         return;
+      if(agentBusy&&e.key==='Escape'){e.preventDefault();stopAgent();return;}
+      if(presenting){
+        if(e.key==='Escape'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z')){e.preventDefault();cancelWalkthrough();}
+        else if(e.code==='Space'){e.preventDefault();walkthrough.toggle();}
+        return;
+      }
+      if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&!modal&&!productOpen&&!costOpen&&!replacementDraft&&!productPreview){e.preventDefault();agentInput.current?.focus();return;}
+      if (productOpen || costOpen) { if (e.key === "Escape") { setProductOpen(false); setCostOpen(false); } return; }
+      if (productPreview) { if (e.key === "Escape") { setProductPreview(null); setMobilePanel(null); } return; }
       if (replacementDraft && e.key !== "Escape") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -390,7 +606,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, redo, selected, editItem, replacementDraft, modal, deleteSelected]);
+  }, [undo, redo, selected, editItem, replacementDraft, productPreview, productOpen, costOpen, modal, deleteSelected,presenting,agentBusy]);
   useEffect(
     () => () => {
       referencesRef.current.forEach((r) => URL.revokeObjectURL(r.url));
@@ -398,21 +614,23 @@ export default function App() {
     },
     [],
   );
+  movedOn.current=Boolean(walkthrough.view||modal||productOpen||costOpen||replacementDraft||productPreview||mode==='walk');
   const sceneState = useMemo<SceneState>(
     () => ({
       room: project.room,
-      layout:
-        replacementDraft && showReplacement
-          ? previewReplacement(layout, replacementDraft)
-          : layout,
-      ghostItem: replacementDraft && showReplacement ? selected : null,
-      selectedId,
+      layout: (presenting?layoutFrame.current?.layout:null) ?? (productPreview && productPreview.layoutId === layout.id && showReplacement
+        ? { ...layout, items: productPreview.originalId ? layout.items.map(i => i.id === productPreview.originalId ? productPreview.candidate : i) : [...layout.items, productPreview.candidate] }
+        : replacementDraft && showReplacement ? previewReplacement(layout, replacementDraft) : layout),
+      presentation:presenting,
+      ghostItem: productPreview && showReplacement ? layout.items.find(i => i.id === productPreview.originalId) ?? null : replacementDraft && showReplacement ? selected : null,
+      selectedId: (presenting?layoutFrame.current?.itemId:null) ?? (productPreview ? productPreview.candidate.id : selectedId),
       mode,
       wallsVisible,
-      showClearances,
+      showClearances:presenting?false:showClearances,
     }),
     [
       project.room,
+      productPreview,
       layout,
       selectedId,
       mode,
@@ -421,10 +639,15 @@ export default function App() {
       replacementDraft,
       showReplacement,
       selected,
+      walkthrough.view?.plan.id,
+      walkthrough.view?.finished,
     ],
   );
+  sceneBase.current=sceneState;
   const select = (id: string | null) => {
-    if (replacementDraft) return;
+    if(presenting)return;
+    if(walkthrough.view)walkthrough.close();
+    if (replacementDraft || productPreview || productOpen || costOpen) return;
     setSelectedId(id);
     if (id) {
       setTab("object");
@@ -432,6 +655,8 @@ export default function App() {
     }
   };
   const onMove = (id: string, position: Position) => {
+    if (productPreview && id === productPreview.candidate.id) { setProductPreview(old => old ? { ...old, candidate: { ...old.candidate, position: { x: Math.round(position.x * 100) / 100, z: Math.round(position.z * 100) / 100 } } } : old); return true; }
+    if (productOpen || costOpen) return false;
     const item = layout.items.find((i) => i.id === id);
     if (!item || item.locked || replacementDraft) return false;
     return editItem(id, {
@@ -477,10 +702,11 @@ export default function App() {
       return;
     }
     try {
-      const next = parseProject(await file.text());
+      const parsed = parseProject(await file.text());
+      const next = { ...parsed, id: parsed.id ?? crypto.randomUUID(), name: parsed.name ?? (file.name.replace(/\.json$/i, "").slice(0, 80) || "My room") };
       commit((p) => Object.assign(p, next));
       setSelectedId(null);
-      setReplacementDraft(null);
+      setReplacementDraft(null); setProductPreview(null); setProductOpen(false);
       notify(
         "Project opened successfully. Imported GLB files are stored separately in this browser.",
       );
@@ -494,6 +720,7 @@ export default function App() {
     if (fileInput.current) fileInput.current.value = "";
   };
   const capture = () => {
+    const startedAt = new Date().toISOString(), started = performance.now();
     try {
       const url = controller.current?.capture();
       if (!url) {
@@ -506,6 +733,7 @@ export default function App() {
         "roomshift-" + layout.name.toLowerCase().replaceAll(" ", "-") + ".png";
       a.click();
       notify("Room image downloaded.");
+      void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name, kind: "render", name: "Export room image", engine: "Three.js PNG export", startedAt, elapsedMs: performance.now() - started }));
     } catch {
       notify("The room image could not be exported.");
     }
@@ -554,10 +782,12 @@ export default function App() {
         </a>
         <div className="breadcrumb">
           My spaces <ChevronRight size={12} />
-          <span>My bedroom</span>
+          <span>{project.name ?? "My bedroom"}</span>
           <span className="project-count">01</span>
         </div>
-        <div className="header-actions">
+        <div className="header-actions" inert={presenting}>
+          <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>
+          <a className="icon-button subtle studio-account" aria-label={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} title={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} href={studio.session?.user ? "/signout-with-chatgpt?return_to=/" : "/signin-with-chatgpt?return_to=/"} target="_top"><UserRound size={16}/></a>
           <span className="save-status">
             <i />
             {saved ? "Saved on this device" : "Saving…"}
@@ -614,6 +844,7 @@ export default function App() {
       <main className="workspace">
         <aside
           className={`inventory-panel ${mobilePanel === "items" ? "mobile-open" : ""}`}
+          inert={presenting}
         >
           <div className="panel-heading">
             <div>
@@ -721,7 +952,7 @@ export default function App() {
             onSelect={select}
             onMove={onMove}
             onController={(c) => (controller.current = c)}
-            onReady={() => setReady(true)}
+            onReady={() => { sceneFinished.current ??= performance.now(); setReady(true); }}
             onError={setSceneError}
           />
           <div className="stage-heading">
@@ -740,7 +971,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Undo"
-                disabled={!past.length || !!replacementDraft}
+                disabled={!past.length || !!replacementDraft || !!productPreview || productOpen || costOpen || presenting}
                 onClick={undo}
               >
                 <Undo2 size={16} />
@@ -748,7 +979,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Redo"
-                disabled={!future.length || !!replacementDraft}
+                disabled={!future.length || !!replacementDraft || !!productPreview || productOpen || costOpen || presenting}
                 onClick={redo}
               >
                 <Redo2 size={16} />
@@ -790,6 +1021,7 @@ export default function App() {
               </small>
             </div>
           )}
+          <LayoutAgentComposer ref={agentInput} value={layoutRequest} busy={agentBusy} disabled={presenting} hidden={presenting||mode==='walk'||!!replacementDraft||!!productPreview} reply={layoutReply} onStop={stopAgent} canReset={project.activeLayoutId!=='original'&&project.layouts.some(l=>l.id==='original')} onChange={setLayoutRequest} onAsk={askLayout} onDismiss={()=>setLayoutReply(null)}/>
           <div className="stage-bottom">
             <div className="view-options">
               <button
@@ -811,7 +1043,7 @@ export default function App() {
                 <span>Clearances</span>
               </button>
             </div>
-            <div className="mode-switch" aria-label="View mode">
+            <div className="mode-switch" aria-label="View mode" inert={presenting}>
               {(
                 [
                   { id: "plan", Icon: Grid2X2, label: "2D plan" },
@@ -859,11 +1091,19 @@ export default function App() {
           </button>
         </section>
         <aside
-          className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""}`}
+          className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""} ${walkthrough.view?'walkthrough-panel':''}`}
         >
-          {replacementDraft && selected ? (
+          {walkthrough.view ? <LayoutExplainerPanel {...walkthrough.view} onToggle={walkthrough.toggle} onNext={walkthrough.next} onPrevious={walkthrough.previous} onReplay={walkthrough.replay} onClose={cancelWalkthrough} onFinish={walkthrough.finish} onSeek={walkthrough.seek} onSpeed={walkthrough.speed}/> : productPreview && productPreview.layoutId === layout.id ? (
+            <ProductPreviewPanel product={productPreview.product} candidate={productPreview.candidate} original={layout.items.find(i => i.id === productPreview.originalId) ?? null} layout={layout} room={project.room} showAfter={showReplacement} onCompare={setShowReplacement} onFocus={() => controller.current?.focusItem?.(productPreview.candidate.id)} onBack={() => { const preview = productPreview; setProductPreview(null); openProducts(layout.items.find(i => i.id === preview.originalId) ?? null, preview.product.id); }} onConfirm={() => {
+              const preview = productPreview;
+              if (preview.layoutId !== layout.id || (preview.originalId && (!layout.items.some(i => i.id === preview.originalId) || layout.items.find(i => i.id === preview.originalId)?.locked))) { notify("The layout changed. Review this product again before using it."); return; }
+              const accepted = editLayout(l => { if (preview.originalId) l.items = l.items.map(i => i.id === preview.originalId ? clone(preview.candidate) : i); else l.items.push(clone(preview.candidate)); });
+              if (accepted) { setSelectedId(preview.candidate.id); setProductPreview(null); setTab("object"); notify("Product saved. Undo restores the previous room layout."); }
+            }} />
+          ) : replacementDraft && selected ? (
             <ReplacementPanel
               original={selected}
+              onProductLink={() => openProducts(selected)}
               candidate={replacementDraft}
               layout={layout}
               room={project.room}
@@ -943,19 +1183,19 @@ export default function App() {
                       </button>
                     </div>
                     <div className="object-preview">
-                      <img
+                      {(!selected.assetId?.startsWith('local:')||selectedProductPhoto)&&<img
                         className="object-render-preview"
-                        src={`/assets/thumbnails/${selected.assetId?.startsWith("builtin:") ? selected.assetId.slice(8) : selected.kind}.png`}
+                        src={selected.assetId?.startsWith('local:')?selectedProductPhoto:`/assets/thumbnails/${selected.assetId?.startsWith("builtin:") ? selected.assetId.slice(8) : selected.kind}.png`}
                         alt={selected.name}
                         onError={(e) => {
                           e.currentTarget.style.display = "none";
                         }}
-                      />
+                      />}
                       <span
                         className={`preview-platform preview-${selected.kind}`}
                       >
                         {(() => {
-                          const Icon = kindIcons[selected.kind];
+                          const Icon = selected.assetId?.startsWith('local:')?Box:kindIcons[selected.kind];
                           return <Icon size={65} strokeWidth={0.85} />;
                         })()}
                       </span>
@@ -979,6 +1219,7 @@ export default function App() {
                     >
                       Try a replacement <ArrowUpRight size={14} />
                     </button>
+                    <button className="focus-piece product-link-entry" onClick={() => openProducts(selected)}><Link2 size={13}/>Have a product link?</button>
                     <button
                       className="focus-piece"
                       onClick={() =>
@@ -1333,20 +1574,17 @@ export default function App() {
         <div className="layouts-intro">
           <span className="eyebrow">SAME ROOM, NEW POSSIBILITIES</span>
           <h2>Find your flow.</h2>
-          <p>Try a different arrangement.</p>
+          <p>Choose a layout. Watch it come together.</p>
         </div>
         <div className="layout-cards">
           {project.layouts.map((l, index) => (
+            <div className="layout-card-wrap" key={l.id}>
             <button
-              key={l.id}
               className={`layout-card ${l.id === layout.id ? "active" : ""}`}
               aria-label={`Switch to ${l.name}`}
               aria-pressed={l.id === layout.id}
-              onClick={() => {
-                setProject((p) => ({ ...p, activeLayoutId: l.id }));
-                setSelectedId(null);
-                setMobilePanel(null);
-              }}
+              aria-busy={presenting&&walkthrough.view?.plan.toId===l.id}
+              onClick={() => startPreset(l.id)}
             >
               <MiniPlan layout={l} project={project} />
               <div className="layout-card-text">
@@ -1365,9 +1603,12 @@ export default function App() {
                 )}
               </span>
             </button>
+            {l.id!=='original'&&<button className="layout-delete" aria-label={`Delete ${l.name}`} disabled={presenting} onClick={()=>deleteLayout(l.id)}><X size={12}/></button>}
+            </div>
           ))}
           <button
             className="new-layout-card"
+            disabled={presenting}
             aria-label="Create layout"
             onClick={() => {
               setLayoutName("My new layout");
@@ -1465,6 +1706,8 @@ export default function App() {
           </button>
         </div>
       )}
+      {productOpen && <ProductWorkbench autoStart={autoStartProduct} onSourceChange={changeProductSource} pipelineSession={studio.pipelineSession} pipelineJobs={studio.pipelineJobs} onCancelGeneration={studio.cancelGeneration} storageNote={studio.storageNote} original={productTarget} initialProductId={initialProductId} roomId={project.id!} roomName={project.name ?? "My bedroom"} products={studio.products} session={studio.session} onResolve={studio.resolve} onSave={studio.save} onTry={tryProduct} onClose={() => setProductOpen(false)} onImportModel={studio.importModel} onAddImage={studio.addImage} onGenerate={generateProduct}/>}
+      {costOpen && <CostTimePanel storageNote={studio.storageNote} operations={studio.operations} products={studio.products} roomId={project.id!} roomName={project.name ?? "My bedroom"} onClose={() => setCostOpen(false)}/>}
       {modal && (
         <div
           className="modal-backdrop"
@@ -1500,6 +1743,7 @@ export default function App() {
                 <span className="eyebrow">MAKE SPACE FOR SOMETHING NEW</span>
                 <h2>A new possibility.</h2>
                 <p>Start with a piece, then give it the dimensions you need.</p>
+                <button className="product-catalog-entry" onClick={() => openProducts(null)}><Link2 size={23}/><span><strong>Try a product link</strong><small>Amazon, Flipkart, or your own specifications and 3D model</small></span><ArrowUpRight size={20}/></button>
                 <div className="catalog-grid">
                   {(Object.keys(kindNames) as ItemKind[]).map((kind) => {
                     const Icon = kindIcons[kind];

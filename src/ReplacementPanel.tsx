@@ -33,6 +33,7 @@ interface Props {
   onConfirm: () => boolean;
   onCancel: () => void;
   onFocus: () => void;
+  onProductLink?: () => void;
 }
 export default function ReplacementPanel({
   original,
@@ -45,6 +46,7 @@ export default function ReplacementPanel({
   onConfirm,
   onCancel,
   onFocus,
+  onProductLink,
 }: Props) {
   const [category, setCategory] = useState(original.kind),
     [loading, setLoading] = useState(false),
@@ -139,6 +141,7 @@ export default function ReplacementPanel({
         </p>
       </header>
       <div className="replacement-scroll">
+        {onProductLink && <button className="product-catalog-entry" onClick={onProductLink}><ImagePlus size={18}/><span><strong>Try a product link</strong><small>Bring a purchase into this space</small></span><ArrowUpRight size={15}/></button>}
         <div className="comparison-switch" aria-label="Replacement comparison">
           <button
             className={!showAfter ? "active" : ""}

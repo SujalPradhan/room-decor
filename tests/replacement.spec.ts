@@ -222,6 +222,7 @@ test("renders an imported local GLB, persists its ID across reload and rejects a
   const assetId = bed(saved).assetId!;
   expect(assetId).toMatch(/^local:[0-9a-f-]{36}$/i);
   await page.reload();
+  await expect(page.locator("canvas")).toBeVisible();
   await expect(page.locator(".stage-loading")).toHaveCount(0, {
     timeout: process.env.CI ? 60_000 : 25_000,
   });

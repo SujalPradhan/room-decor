@@ -3,7 +3,7 @@ import { parseNumericDraft } from "./measurements";
 
 interface Props {
   label: string;
-  value: number;
+  value: number | null;
   min: number;
   max: number;
   unit: string;
@@ -23,13 +23,13 @@ export default function DimensionInput({
   onCommit,
   onInvalidValue,
 }: Props) {
-  const [draft, setDraft] = useState(String(value)),
+  const [draft, setDraft] = useState(value === null ? "" : String(value)),
     [invalid, setInvalid] = useState(false);
   const editing = useRef(false),
     cancelBlur = useRef(false);
   useEffect(() => {
     if (!editing.current) {
-      setDraft(String(value));
+      setDraft(value === null ? "" : String(value));
       setInvalid(false);
     }
   }, [value]);
@@ -41,7 +41,7 @@ export default function DimensionInput({
     }
     const next = parseNumericDraft(draft, min, max);
     if (next === null) {
-      setDraft(String(value));
+      setDraft(value === null ? "" : String(value));
       setInvalid(true);
       onInvalidValue(
         `Enter a value between ${min} and ${max} ${unit}. The previous value was kept.`,
@@ -49,11 +49,11 @@ export default function DimensionInput({
       return;
     }
     setInvalid(false);
-    if (Math.abs(next - value) < 1e-9) {
-      setDraft(String(value));
+    if (value !== null && Math.abs(next - value) < 1e-9) {
+      setDraft(value === null ? "" : String(value));
       return;
     }
-    if (onCommit(next) === false) setDraft(String(value));
+    if (onCommit(next) === false) setDraft(value === null ? "" : String(value));
     else setDraft(String(next));
   }
   return (
@@ -87,7 +87,7 @@ export default function DimensionInput({
           event.preventDefault();
           event.stopPropagation();
           cancelBlur.current = true;
-          setDraft(String(value));
+          setDraft(value === null ? "" : String(value));
           setInvalid(false);
           event.currentTarget.blur();
         }
