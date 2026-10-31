@@ -27,4 +27,5 @@ const worker = {
   },
 };
 
+export { LayoutAgentBudget } from "../server/agent-budget";
 export default worker;

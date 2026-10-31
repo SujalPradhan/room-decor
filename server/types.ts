@@ -30,6 +30,8 @@ export interface StudioEnv {
   STUDIO_LOCAL_PIPELINE_ENABLED?: string;
   ROOMSHIFT_WORKER_TOKEN?: string;
   STUDIO_LAYOUT_AGENT_ENABLED?: string;
+  STUDIO_LAYOUT_AGENT_PUBLIC?: string;
+  LAYOUT_AGENT_BUDGET?: { idFromName(name: string): unknown; get(id: never): { fetch(url: string): Promise<Response> } };
   FOUNDRY_API_KEY?: string;
   AIPIPE_API_KEY?: string;
   LAYOUT_AGENT_FOUNDRY_MODEL?: string;
