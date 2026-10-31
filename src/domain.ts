@@ -144,13 +144,13 @@ export function createInitialProject(): Project {
   airy.wallColor = "#e5e5d9";
   airy.accentColor = "#80917c";
   const airyPositions: Record<string, [number, number, number]> = {
-    bed: [-0.95, -0.7, 0],
-    wardrobe: [1.32, -2.05, 0],
+    bed: [-1.4, -0.45, 0],
+    wardrobe: [1.15, -2.05, 0],
     desk: [-1.72, 1.3, Math.PI / 2],
     chair: [-0.95, 1.4, Math.PI / 2],
-    "floor-bed": [0.8, 0.35, 0],
-    fan: [1.65, -0.6, 0],
-    stool: [-0.2, 2.05, 0],
+    "floor-bed": [1.57, 0, 0],
+    fan: [-1.8, -2.1, 0],
+    stool: [-0.1, -1.95, 0],
   };
   airy.items = airy.items.map((i) => {
     const [x, z, rotation] = airyPositions[i.id];
@@ -471,6 +471,32 @@ function parseItem(value: unknown): FurnitureItem {
     dimensionSource: i.dimensionSource as FurnitureItem["dimensionSource"],
   };
 }
+const RETIRED_AIRY: Record<string, [number, number]> = {
+  bed: [-0.95, -0.7],
+  wardrobe: [1.32, -2.05],
+  desk: [-1.72, 1.3],
+  chair: [-0.95, 1.4],
+  "floor-bed": [0.8, 0.35],
+  fan: [1.65, -0.6],
+  stool: [-0.2, 2.05],
+};
+/** The first Open & airy preset reduced open floor. Replaces saved copies only while they are unedited. */
+export function upgradeRetiredPresets(project: Project): Project {
+  const saved = project.layouts.find((layout) => layout.id === "open-airy");
+  const current = createInitialProject().layouts.find((layout) => layout.id === "open-airy");
+  if (!saved || !current || saved.items.length !== current.items.length) return project;
+  const untouched = saved.items.every((item) => {
+    const retired = RETIRED_AIRY[item.id];
+    return retired && item.position.x === retired[0] && item.position.z === retired[1];
+  });
+  if (!untouched) return project;
+  saved.items = saved.items.map((item) => {
+    const target = current.items.find((candidate) => candidate.id === item.id)!;
+    return { ...item, position: target.position, rotation: target.rotation };
+  });
+  return project;
+}
+
 export function parseProject(text: string): Project {
   if (text.length > 2_000_000) fail("The project is too large (maximum 2 MB).");
   let raw: unknown;

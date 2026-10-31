@@ -1162,8 +1162,20 @@ export function createRoomScene(
     dirty = true;
   }
   function buildFurnitureGroups() {
-    const signature = JSON.stringify(state.layout.items);
-    if (signature === furnitureSignature) return;
+    const signature = JSON.stringify(state.layout.items.map(({position,rotation,dimensions,...appearance})=>appearance));
+    if (signature === furnitureSignature) {
+      let changed=false;
+      for(const item of state.layout.items){
+        const group=objectMap.get(item.id);if(!group)continue;
+        const base=group.userData.baseDimensions??item.dimensions;
+        const scale=[item.dimensions.width/base.width,item.dimensions.height/base.height,item.dimensions.depth/base.depth];
+        if(group.position.x!==item.position.x||group.position.z!==item.position.z||group.rotation.y!==item.rotation||group.scale.x!==scale[0]||group.scale.y!==scale[1]||group.scale.z!==scale[2]){
+          group.position.set(item.position.x,.025,item.position.z);group.rotation.y=item.rotation;group.scale.set(...scale as [number,number,number]);changed=true;
+        }
+      }
+      if(changed){renderer.shadowMap.needsUpdate=true;dirty=true;}
+      return;
+    }
     furnitureSignature = signature;
     disposeTree(furnitureRoot);
     furnitureRoot.clear();
@@ -1172,6 +1184,7 @@ export function createRoomScene(
       .filter((i) => i.visible)
       .forEach((item) => {
         const g = instantiateFurniture(item);
+        g.userData.baseDimensions={...item.dimensions};
         g.position.set(item.position.x, 0.025, item.position.z);
         g.rotation.y = item.rotation;
         furnitureRoot.add(g);
@@ -1360,7 +1373,7 @@ export function createRoomScene(
     dirty = true;
   }
   function onPointerDown(event: PointerEvent) {
-    if (event.button !== 0) return;
+    if (state.presentation || event.button !== 0) return;
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (state.mode === "plan")
       renderer.domElement.setPointerCapture(event.pointerId);
@@ -1601,7 +1614,7 @@ export function createRoomScene(
               );
             }
           });
-          const size = bounds.getSize(new THREE.Vector3());
+          const size = bounds.getSize(new THREE.Vector3()).multiply(g.scale);
           return [id, { width: size.x, depth: size.z, height: size.y }];
         }),
       );

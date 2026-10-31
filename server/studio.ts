@@ -1,3 +1,6 @@
+import { runLayoutAgent, LayoutAgentError } from "./layout-agent";
+import { parseProject } from "../src/domain";
+import type { Project } from "../src/types";
 import { handlePipelineRequest } from "./local-pipeline";
 import type {
   OperationRecord,
@@ -537,6 +540,24 @@ async function getAsset(env: StudioEnv, repo: StudioRepository, id: string) {
     },
   });
 }
+/** Local-only: the model keys stay on this Mac, so a public deployment answers 503 and the app uses its rules. */
+async function layoutAgent(request: Request, url: URL, env: StudioEnv) {
+  if (env.STUDIO_LAYOUT_AGENT_ENABLED !== "true" || !["127.0.0.1", "localhost"].includes(url.hostname))
+    throw new StudioError(503, "LAYOUT_AGENT_UNAVAILABLE", "The room agent is available on the local studio only.");
+  const data = await readJson(request);
+  if (typeof data.request !== "string" || !data.request.trim() || data.request.length > 200)
+    throw new StudioError(400, "INVALID_REQUEST", "Describe what you want in up to 200 characters.");
+  let project: Project;
+  try { project = parseProject(JSON.stringify(data.project)); }
+  catch { throw new StudioError(400, "INVALID_PROJECT", "This room could not be read."); }
+  try {
+    return json(await runLayoutAgent(data.request.trim(), project, { foundryToken: env.FOUNDRY_API_KEY, aipipeToken: env.AIPIPE_API_KEY, foundryModel: env.LAYOUT_AGENT_FOUNDRY_MODEL, aipipeModel: env.LAYOUT_AGENT_AIPIPE_MODEL }));
+  } catch (error) {
+    if (error instanceof LayoutAgentError) throw new StudioError(502, "LAYOUT_AGENT_FAILED", "The room agent could not answer.");
+    throw error;
+  }
+}
+
 export async function handleStudioRequest(
   request: Request,
   env: StudioEnv,
@@ -552,6 +573,8 @@ export async function handleStudioRequest(
       return await session(request, env);
     if (path === "/api/products/resolve" && request.method === "POST")
       return await resolve(request, env);
+    if (path === "/api/layout-agent" && request.method === "POST")
+      return await layoutAgent(request, url, env);
     // The release switch is deliberately checked before body parsing, storage, network, or credentials.
     if (
       (path === "/api/generations" || path === "/api/studio/generation/jobs") &&

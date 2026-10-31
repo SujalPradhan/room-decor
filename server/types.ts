@@ -29,6 +29,11 @@ export interface StudioEnv {
   STUDIO_PAID_GENERATION_ENABLED?: string;
   STUDIO_LOCAL_PIPELINE_ENABLED?: string;
   ROOMSHIFT_WORKER_TOKEN?: string;
+  STUDIO_LAYOUT_AGENT_ENABLED?: string;
+  FOUNDRY_API_KEY?: string;
+  AIPIPE_API_KEY?: string;
+  LAYOUT_AGENT_FOUNDRY_MODEL?: string;
+  LAYOUT_AGENT_AIPIPE_MODEL?: string;
 }
 export interface RequestContext {
   waitUntil(promise: Promise<unknown>): void;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Armchair,
   ArrowDownToLine,
@@ -59,6 +59,7 @@ import {
   createFurnitureItem,
   createInitialProject,
   parseProject,
+  upgradeRetiredPresets,
   serializeProject,
   validateLayout,
 } from "./domain";
@@ -70,6 +71,11 @@ import DimensionInput from "./DimensionInput";
 import ProductWorkbench from "./ProductWorkbench";
 import CostTimePanel from "./CostTimePanel";
 import ProductPreviewPanel from "./ProductPreviewPanel";
+import LayoutExplainerPanel from "./LayoutExplainerPanel";
+import {useLayoutWalkthrough} from "./useLayoutWalkthrough";
+import {matchLayoutIntent} from "./layout-intent";
+import type {LayoutAgentResult} from "./layout-agent-types";
+import {studioRequest} from "./product-client";
 import { useProductStudio } from "./useProductStudio";
 import { productToFurniture, generatedProductToFurniture, isSafeProductImageUrl } from "./product-domain";
 import { chooseProductPosition, readPlacementIntents, type ProductPlacementIntent } from "./automatic-products";
@@ -130,7 +136,7 @@ function initialProject(): Project {
   const identify = (p: Project): Project => ({ ...p, id: p.id ?? crypto.randomUUID(), name: p.name ?? "My bedroom" });
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return identify(parseProject(saved));
+    if (saved) return identify(upgradeRetiredPresets(parseProject(saved)));
   } catch {}
   return identify(createInitialProject());
 }
@@ -220,6 +226,7 @@ function MiniPlan({ layout, project }: { layout: Layout; project: Project }) {
 }
 
 export default function App() {
+  const layoutFrame=useRef<{layout:Layout;itemId?:string}|null>(null),sceneBase=useRef<SceneState|null>(null);
   const [productOpen, setProductOpen] = useState(false), [costOpen, setCostOpen] = useState(false);
   const [productTarget, setProductTarget] = useState<FurnitureItem | null>(null), [initialProductId, setInitialProductId] = useState<string | undefined>();
   const [autoStartProduct,setAutoStartProduct]=useState(false);
@@ -324,6 +331,59 @@ export default function App() {
     },
     [notify],
   );
+  const agentLayout=useRef<Layout|null>(null);
+  const walkthrough=useLayoutWalkthrough((next,itemId)=>{
+    layoutFrame.current=next?{layout:next,itemId}:null;
+    const base=sceneBase.current,current=projectRef.current;
+    if(base)controller.current?.update({...base,room:current.room,layout:next??current.layouts.find(l=>l.id===current.activeLayoutId)!,selectedId:next?itemId??null:null,presentation:Boolean(next),showClearances:next?false:base.showClearances,mode:base.mode==='walk'&&next?'orbit':base.mode});
+  },targetId=>{
+    const current=projectRef.current,proposed=agentLayout.current?.id===targetId?agentLayout.current:null;
+    if(proposed){
+      if(current.layouts.length>=12){notify('This project has 12 layouts. Remove one before keeping this arrangement.');return false;}
+      const accepted=commit(p=>{p.layouts.push(structuredClone(proposed));p.activeLayoutId=proposed.id;});
+      if(accepted){agentLayout.current=null;notify('Layout saved. Undo returns to the previous layout.');}
+      return accepted;
+    }
+    if(!current.layouts.some(l=>l.id===targetId)){notify('That saved layout is no longer available.');return false;}
+    if(current.activeLayoutId===targetId)return true;
+    const accepted=commit(p=>{p.activeLayoutId=targetId;});
+    if(accepted)notify('Layout switched. Undo returns to the previous layout.');
+    return accepted;
+  });
+  const presenting=Boolean(walkthrough.view&&!walkthrough.view.finished);
+  const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState(''),[agentBusy,setAgentBusy]=useState(false);
+  const startPreset=(targetId:string,request?:string)=>{
+    const current=projectRef.current,target=current.layouts.find(l=>l.id===targetId);
+    if(!target||(!presenting&&current.activeLayoutId===targetId))return;
+    if(presenting&&walkthrough.view?.plan.toId===targetId)return;
+    const snapshot=walkthrough.snapshot(),from=snapshot&&presenting?{...snapshot,id:'current-view',name:'Current view'}:current.layouts.find(l=>l.id===current.activeLayoutId)!;
+    setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
+    walkthrough.start(from,target,current.room,request);
+  };
+  const useRules=(request:string,prefix='')=>{
+    const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room);
+    setLayoutReply(prefix+match.reply);
+    if(match.targetId)startPreset(match.targetId,request);
+  };
+  const askLayout=async(event:FormEvent)=>{
+    event.preventDefault();
+    const request=layoutRequest.trim(),asked=projectRef.current;
+    if(!request||agentBusy||presenting)return;
+    setAgentBusy(true);setLayoutReply('Asking the room agent…');
+    let result:LayoutAgentResult;
+    try{result=await studioRequest<LayoutAgentResult>('/api/layout-agent',{method:'POST',body:JSON.stringify({request,project:asked}),signal:AbortSignal.timeout(60000)});}
+    catch{setAgentBusy(false);useRules(request,'The room agent is unavailable, so a saved layout was matched by rule. ');return;}
+    setAgentBusy(false);
+    const current=projectRef.current,from=current.layouts.find(l=>l.id===current.activeLayoutId)!;
+    if(current!==asked){setLayoutReply('The room changed while the agent was working. Ask again.');return;}
+    setLayoutReply(`${result.reply} ${result.provider} · ${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`);
+    if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request);
+    if(result.action==='rearrange'){
+      agentLayout.current=result.layout;
+      setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
+      walkthrough.start(from,result.layout,current.room,request,result.reasons);
+    }
+  };
   const editLayout = useCallback(
     (mutate: (l: Layout) => void) =>
       commit((p) => {
@@ -446,17 +506,21 @@ export default function App() {
     }
   }, [selected, replacementDraft, productPreview, productOpen, costOpen, modal, editLayout, notify]);
   const undo = useCallback(() => {
+    if(presenting){walkthrough.close();return;}
     if (!past.length) return;
+    walkthrough.close();
     setFuture((f) => [clone(project), ...f]);
     setProject(past[past.length - 1]);
     setPast((p) => p.slice(0, -1));
-  }, [past, project]);
+  }, [past, project,presenting]);
   const redo = useCallback(() => {
+    if(presenting){walkthrough.close();return;}
     if (!future.length) return;
+    walkthrough.close();
     setPast((p) => [...p, clone(project)]);
     setProject(future[0]);
     setFuture((f) => f.slice(1));
-  }, [future, project]);
+  }, [future, project,presenting]);
   useEffect(() => {
     const t = setTimeout(() => {
       try {
@@ -476,6 +540,11 @@ export default function App() {
         )
       )
         return;
+      if(presenting){
+        if(e.key==='Escape'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z')){e.preventDefault();walkthrough.close();}
+        else if(e.code==='Space'){e.preventDefault();walkthrough.toggle();}
+        return;
+      }
       if (productOpen || costOpen) { if (e.key === "Escape") { setProductOpen(false); setCostOpen(false); } return; }
       if (productPreview) { if (e.key === "Escape") { setProductPreview(null); setMobilePanel(null); } return; }
       if (replacementDraft && e.key !== "Escape") return;
@@ -511,7 +580,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, redo, selected, editItem, replacementDraft, productPreview, productOpen, costOpen, modal, deleteSelected]);
+  }, [undo, redo, selected, editItem, replacementDraft, productPreview, productOpen, costOpen, modal, deleteSelected,presenting]);
   useEffect(
     () => () => {
       referencesRef.current.forEach((r) => URL.revokeObjectURL(r.url));
@@ -522,14 +591,15 @@ export default function App() {
   const sceneState = useMemo<SceneState>(
     () => ({
       room: project.room,
-      layout: productPreview && productPreview.layoutId === layout.id && showReplacement
+      layout: layoutFrame.current?.layout ?? (productPreview && productPreview.layoutId === layout.id && showReplacement
         ? { ...layout, items: productPreview.originalId ? layout.items.map(i => i.id === productPreview.originalId ? productPreview.candidate : i) : [...layout.items, productPreview.candidate] }
-        : replacementDraft && showReplacement ? previewReplacement(layout, replacementDraft) : layout,
+        : replacementDraft && showReplacement ? previewReplacement(layout, replacementDraft) : layout),
+      presentation:presenting,
       ghostItem: productPreview && showReplacement ? layout.items.find(i => i.id === productPreview.originalId) ?? null : replacementDraft && showReplacement ? selected : null,
-      selectedId: productPreview ? productPreview.candidate.id : selectedId,
+      selectedId: layoutFrame.current?.itemId ?? (productPreview ? productPreview.candidate.id : selectedId),
       mode,
       wallsVisible,
-      showClearances,
+      showClearances:presenting?false:showClearances,
     }),
     [
       project.room,
@@ -542,9 +612,14 @@ export default function App() {
       replacementDraft,
       showReplacement,
       selected,
+      walkthrough.view?.plan.id,
+      walkthrough.view?.finished,
     ],
   );
+  sceneBase.current=sceneState;
   const select = (id: string | null) => {
+    if(presenting)return;
+    if(walkthrough.view)walkthrough.close();
     if (replacementDraft || productPreview || productOpen || costOpen) return;
     setSelectedId(id);
     if (id) {
@@ -683,7 +758,7 @@ export default function App() {
           <span>{project.name ?? "My bedroom"}</span>
           <span className="project-count">01</span>
         </div>
-        <div className="header-actions">
+        <div className="header-actions" inert={presenting}>
           <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>
           <a className="icon-button subtle studio-account" aria-label={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} title={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} href={studio.session?.user ? "/signout-with-chatgpt?return_to=/" : "/signin-with-chatgpt?return_to=/"} target="_top"><UserRound size={16}/></a>
           <span className="save-status">
@@ -742,6 +817,7 @@ export default function App() {
       <main className="workspace">
         <aside
           className={`inventory-panel ${mobilePanel === "items" ? "mobile-open" : ""}`}
+          inert={presenting}
         >
           <div className="panel-heading">
             <div>
@@ -868,7 +944,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Undo"
-                disabled={!past.length || !!replacementDraft || !!productPreview || productOpen || costOpen}
+                disabled={!past.length || !!replacementDraft || !!productPreview || productOpen || costOpen || presenting}
                 onClick={undo}
               >
                 <Undo2 size={16} />
@@ -876,7 +952,7 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Redo"
-                disabled={!future.length || !!replacementDraft || !!productPreview || productOpen || costOpen}
+                disabled={!future.length || !!replacementDraft || !!productPreview || productOpen || costOpen || presenting}
                 onClick={redo}
               >
                 <Redo2 size={16} />
@@ -939,7 +1015,7 @@ export default function App() {
                 <span>Clearances</span>
               </button>
             </div>
-            <div className="mode-switch" aria-label="View mode">
+            <div className="mode-switch" aria-label="View mode" inert={presenting}>
               {(
                 [
                   { id: "plan", Icon: Grid2X2, label: "2D plan" },
@@ -987,9 +1063,9 @@ export default function App() {
           </button>
         </section>
         <aside
-          className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""}`}
+          className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""} ${walkthrough.view?'walkthrough-panel':''}`}
         >
-          {productPreview && productPreview.layoutId === layout.id ? (
+          {walkthrough.view ? <LayoutExplainerPanel {...walkthrough.view} onToggle={walkthrough.toggle} onNext={walkthrough.next} onPrevious={walkthrough.previous} onReplay={walkthrough.replay} onClose={walkthrough.close} onFinish={walkthrough.finish} onSeek={walkthrough.seek} onSpeed={walkthrough.speed}/> : productPreview && productPreview.layoutId === layout.id ? (
             <ProductPreviewPanel product={productPreview.product} candidate={productPreview.candidate} original={layout.items.find(i => i.id === productPreview.originalId) ?? null} layout={layout} room={project.room} showAfter={showReplacement} onCompare={setShowReplacement} onFocus={() => controller.current?.focusItem?.(productPreview.candidate.id)} onBack={() => { const preview = productPreview; setProductPreview(null); openProducts(layout.items.find(i => i.id === preview.originalId) ?? null, preview.product.id); }} onConfirm={() => {
               const preview = productPreview;
               if (preview.layoutId !== layout.id || (preview.originalId && (!layout.items.some(i => i.id === preview.originalId) || layout.items.find(i => i.id === preview.originalId)?.locked))) { notify("The layout changed. Review this product again before using it."); return; }
@@ -1470,8 +1546,15 @@ export default function App() {
         <div className="layouts-intro">
           <span className="eyebrow">SAME ROOM, NEW POSSIBILITIES</span>
           <h2>Find your flow.</h2>
-          <p>Try a different arrangement.</p>
+          <p>Choose a layout, or say what you want. Watch it come together.</p>
         </div>
+        <form className="layout-prompt" onSubmit={askLayout}>
+            <div className="layout-prompt-row">
+              <input aria-label="Describe what you want from this room" value={layoutRequest} maxLength={200} disabled={agentBusy||presenting} placeholder="My room feels cluttered, I need more space" onChange={e=>setLayoutRequest(e.target.value)}/>
+              <button type="submit" aria-label="Rearrange the room" disabled={!layoutRequest.trim()||agentBusy||presenting}><ArrowUpRight size={16}/></button>
+            </div>
+            <p aria-live="polite">{layoutReply}</p>
+        </form>
         <div className="layout-cards">
           {project.layouts.map((l, index) => (
             <button
@@ -1479,12 +1562,8 @@ export default function App() {
               className={`layout-card ${l.id === layout.id ? "active" : ""}`}
               aria-label={`Switch to ${l.name}`}
               aria-pressed={l.id === layout.id}
-              onClick={() => {
-                setProductPreview(null); setReplacementDraft(null);
-                setProject((p) => ({ ...p, activeLayoutId: l.id }));
-                setSelectedId(null);
-                setMobilePanel(null);
-              }}
+              aria-busy={presenting&&walkthrough.view?.plan.toId===l.id}
+              onClick={() => startPreset(l.id)}
             >
               <MiniPlan layout={l} project={project} />
               <div className="layout-card-text">
@@ -1506,6 +1585,7 @@ export default function App() {
           ))}
           <button
             className="new-layout-card"
+            disabled={presenting}
             aria-label="Create layout"
             onClick={() => {
               setLayoutName("My new layout");

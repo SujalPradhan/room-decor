@@ -62,6 +62,7 @@ export interface PlacementIssue {
   itemIds: string[];
 }
 export interface SceneState {
+  presentation?:boolean;
   ghostItem?: FurnitureItem | null;
   room: RoomSpec;
   layout: Layout;
