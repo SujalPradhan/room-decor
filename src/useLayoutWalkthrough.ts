@@ -2,12 +2,12 @@ import {useEffect,useRef,useState} from 'react';
 import {buildLayoutExplanation,sampleLayoutExplanation,type LayoutExplanationPlan} from './layout-explainer';
 import type {Layout,RoomSpec} from './types';
 
-export interface LayoutWalkthroughView {plan:LayoutExplanationPlan;elapsedMs:number;stepIndex:number;playing:boolean;finished:boolean;speed:number;preparationMs:number}
-type Session=LayoutWalkthroughView&{from:Layout;to:Layout;completed:boolean};
+export interface LayoutWalkthroughView {plan:LayoutExplanationPlan;elapsedMs:number;stepIndex:number;playing:boolean;finished:boolean;speed:number;preparationMs:number;completed:boolean}
+type Session=LayoutWalkthroughView&{from:Layout;to:Layout};
 export function useLayoutWalkthrough(onFrame:(layout:Layout|null,itemId?:string)=>void,onComplete:(targetId:string)=>boolean){
  const [view,setView]=useState<LayoutWalkthroughView|null>(null);
  const current=useRef<Session|null>(null),callbacks=useRef({onFrame,onComplete}),lastPublish=useRef(0);callbacks.current={onFrame,onComplete};
- function publish(){const s=current.current;if(s)setView({plan:s.plan,elapsedMs:s.elapsedMs,stepIndex:s.stepIndex,playing:s.playing,finished:s.finished,speed:s.speed,preparationMs:s.preparationMs});else setView(null);}
+ function publish(){const s=current.current;if(s)setView({plan:s.plan,elapsedMs:s.elapsedMs,stepIndex:s.stepIndex,playing:s.playing,finished:s.finished,speed:s.speed,preparationMs:s.preparationMs,completed:s.completed});else setView(null);}
  function draw(){
   const s=current.current;if(!s)return;
   const sampled=sampleLayoutExplanation(s.from,s.to,s.plan,s.elapsedMs);s.stepIndex=sampled.stepIndex;s.finished=sampled.finished;
@@ -32,7 +32,7 @@ export function useLayoutWalkthrough(onFrame:(layout:Layout|null,itemId?:string)
  },[view?.playing,view?.plan.id]);
  useEffect(()=>()=>{current.current=null;},[]);
  return {view,current,
-  start(from:Layout,to:Layout,room:RoomSpec,request?:string,reasons?:Record<string,string>){const begin=performance.now(),built=buildLayoutExplanation(from,to,room),plan={...built,request,steps:built.steps.map(step=>({...step,agentReason:step.itemId?reasons?.[step.itemId]:undefined}))},reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;current.current={from:structuredClone(from),to:structuredClone(to),plan,elapsedMs:reduced?plan.totalDurationMs:0,stepIndex:0,playing:!reduced,finished:false,speed:1,completed:false,preparationMs:performance.now()-begin};draw();publish();},
+  start(from:Layout,to:Layout,room:RoomSpec,request?:string,reasons?:Record<string,string>,byAgent=false){const begin=performance.now(),built=buildLayoutExplanation(from,to,room),plan={...built,request,byAgent,steps:built.steps.map(step=>({...step,agentReason:reasons?.[step.itemId??'finish']}))},reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;current.current={from:structuredClone(from),to:structuredClone(to),plan,elapsedMs:reduced?plan.totalDurationMs:0,stepIndex:0,playing:!reduced,finished:false,speed:1,completed:false,preparationMs:performance.now()-begin};draw();publish();},
   close(){current.current=null;callbacks.current.onFrame(null);setView(null);},
   toggle(){const s=current.current;if(!s)return;if(s.finished){s.elapsedMs=0;s.finished=false;}s.playing=!s.playing;draw();publish();},
   replay(){const s=current.current;if(!s)return;s.elapsedMs=0;s.finished=false;s.playing=!window.matchMedia('(prefers-reduced-motion: reduce)').matches;draw();publish();},

@@ -19,6 +19,7 @@ export interface LayoutExplanationPlan {
   toId: string;
   title: string;
   request?: string;
+  byAgent?: boolean;
   steps: LayoutExplanationStep[];
   totalDurationMs: number;
   summary: string;
@@ -112,9 +113,13 @@ function stepReason(step: LayoutExplanationStep, floorBefore: number, floorAfter
   else if (change <= -.05) reasons.push(`On its own this takes ${metres(-change)} m² from the largest open area; it is part of the full ${targetName} arrangement.`);
   if (step.from && step.to && wallGap(step.from, room) - wallGap(step.to, room) >= .05) reasons.push(`Sits ${metres(wallGap(step.from, room) - wallGap(step.to, room))} m closer to the wall.`);
   if (issuesAfter < issuesBefore) reasons.push(`Clears ${issuesBefore - issuesAfter === 1 ? 'a placement finding' : `${issuesBefore - issuesAfter} placement findings`}.`);
-  return reasons.join(' ') || `Leaves the largest open area as it is; this is where ${targetName} puts it.`;
+  if (reasons.length) return reasons.join(' ');
+  if (!step.to) return 'Takes it out of the room.';
+  if (!step.from) return 'Adds it to the room.';
+  return step.kind === 'move' ? `Leaves the largest open area as it is; this is where ${targetName} puts it.` : 'Leaves the largest open area as it is.';
 }
 
+const intent = (layout: Layout) => layout.description.trim().replace(/[.!]+$/, '');
 /** A deterministic explanation of preset differences, not an optimization or physical motion simulation. */
 export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec): LayoutExplanationPlan {
   const before = itemMap(from), after = itemMap(to), steps: LayoutExplanationStep[] = [], warnings: string[] = [];
@@ -130,13 +135,13 @@ export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec)
       if (change.rotated) details.push(`Rotate ${Math.round(Math.abs(shortestYawDelta(item.rotation, target.rotation)) * 180 / Math.PI)}° along the shortest turn.`);
       if (change.resized) details.push(`Set width × depth × height to ${axes.map(axis => metres(target.dimensions[axis])).join(' × ')} m.`);
       if (change.recolored) details.push(`Change its colour from ${item.color} to ${target.color}.`);
-      if (change.geometry) details.push('Use the target preset’s furniture model and product association.');
+      if (change.geometry) details.push('Use the target layout’s furniture model and product association.');
       if (change.visibility) details.push(target.visible ? 'Show this piece.' : 'Hide this piece.');
-      if (change.metadata) details.push('Keep the name, lock and measurement labels stored in the target preset.');
+      if (change.metadata) details.push('Keep the name, lock and measurement labels stored in the target layout.');
       const spatialOnly = (change.moved || change.rotated) && !change.resized && !change.recolored && !change.geometry && !change.visibility && !change.metadata;
       steps.push({ id: `change:${item.id}`, itemId: item.id, kind: spatialOnly ? 'move' : 'update', title: `${spatialOnly ? 'Reposition' : 'Update'} ${target.name}`, description: details.join(' '), from: clone(item), to: clone(target), durationMs: 900 });
     }
-    if (item.locked) warnings.push(`${item.name} is locked in ${from.name}. This previews a separate preset; the source item and its lock remain unchanged.`);
+    if (item.locked) warnings.push(`${item.name} is locked in ${from.name}. This previews a separate layout; the source item and its lock remain unchanged.`);
   }
   for (const item of to.items) if (!before.has(item.id)) {
     steps.push({ id: `add:${item.id}`, itemId: item.id, kind: 'add', title: `Add ${item.name}`, description: `${item.name} is included in ${to.name}${item.visible ? '' : ' and starts hidden'}.`, to: clone(item), durationMs: 900 });
@@ -146,7 +151,7 @@ export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec)
     const details: string[] = [];
     if (from.wallColor.toLowerCase() !== to.wallColor.toLowerCase()) details.push(`Set the walls to ${to.wallColor}.`);
     if (from.accentColor.toLowerCase() !== to.accentColor.toLowerCase()) details.push(`Set the accent colour to ${to.accentColor}.`);
-    if (to.description.trim()) details.push(`Preset intent: ${to.description.trim()}`);
+    if (to.description.trim()) details.push(`Intent: ${intent(to)}.`);
     steps.push({ id: 'finish', kind: 'finish', title: `See ${to.name}`, description: details.join(' ') || 'Show the target preset in full.', durationMs: 650 });
   }
   const startOpenFloor = openFloorArea(from, room), endOpenFloor = openFloorArea(to, room);
@@ -170,8 +175,8 @@ export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec)
   if (unbounded > 8000) for (const step of steps) step.durationMs = Math.floor(step.durationMs * 8000 / unbounded);
   const startIssueCount = validateLayout(from, room).length, endIssueCount = validateLayout(to, room).length;
   const changes = steps.filter(step => step.kind !== 'finish').length;
-  const summary = `${changes ? `${changes} furniture ${changes === 1 ? 'change' : 'changes'}` : finishChanged ? 'Room colours change' : 'No visible furniture or colour changes'}. ${to.description.trim() ? `Preset intent: ${to.description.trim()}. ` : ''}Largest open floor: ${metres(startOpenFloor)} → ${metres(endOpenFloor)} m². Placement checks report ${startIssueCount} ${startIssueCount === 1 ? 'finding' : 'findings'} before and ${endIssueCount} in the target. Room sizes are estimated; this does not establish verified fit.`;
-  if (steps.length) warnings.unshift('Animated movement illustrates the preset change; it does not verify a collision-free physical moving route.');
+  const summary = `${changes ? `${changes} furniture ${changes === 1 ? 'change' : 'changes'}` : finishChanged ? 'Room colours change' : 'No visible furniture or colour changes'}. ${to.description.trim() ? `Intent: ${intent(to)}. ` : ''}Largest open floor: ${metres(startOpenFloor)} → ${metres(endOpenFloor)} m². Placement checks report ${startIssueCount} ${startIssueCount === 1 ? 'finding' : 'findings'} before and ${endIssueCount} in the target. Room sizes are estimated; this does not establish verified fit.`;
+  if (steps.length) warnings.unshift('Animated movement illustrates the change; it does not verify a collision-free physical moving route.');
   return { id: `layout-explanation:${from.id}:${to.id}`, fromId: from.id, toId: to.id, title: `${from.name} → ${to.name}`, steps, totalDurationMs: steps.reduce((sum, step) => sum + step.durationMs, 0), summary, warnings, startIssueCount, endIssueCount, startOpenFloor, endOpenFloor };
 }
 

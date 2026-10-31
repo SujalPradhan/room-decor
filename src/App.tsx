@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Armchair,
   ArrowDownToLine,
@@ -72,9 +72,11 @@ import ProductWorkbench from "./ProductWorkbench";
 import CostTimePanel from "./CostTimePanel";
 import ProductPreviewPanel from "./ProductPreviewPanel";
 import LayoutExplainerPanel from "./LayoutExplainerPanel";
+import LayoutAgentComposer,{type LayoutAgentReply} from "./LayoutAgentComposer";
 import {useLayoutWalkthrough} from "./useLayoutWalkthrough";
 import {matchLayoutIntent} from "./layout-intent";
 import type {LayoutAgentResult} from "./layout-agent-types";
+import {readLayoutAgentResult} from "./layout-agent-client";
 import {studioRequest} from "./product-client";
 import { useProductStudio } from "./useProductStudio";
 import { productToFurniture, generatedProductToFurniture, isSafeProductImageUrl } from "./product-domain";
@@ -332,6 +334,7 @@ export default function App() {
     [notify],
   );
   const agentLayout=useRef<Layout|null>(null);
+  const clearAsked=()=>{if(walkthrough.current.current?.plan.request)setLayoutRequest('');};
   const walkthrough=useLayoutWalkthrough((next,itemId)=>{
     layoutFrame.current=next?{layout:next,itemId}:null;
     const base=sceneBase.current,current=projectRef.current;
@@ -339,50 +342,71 @@ export default function App() {
   },targetId=>{
     const current=projectRef.current,proposed=agentLayout.current?.id===targetId?agentLayout.current:null;
     if(proposed){
-      if(current.layouts.length>=12){notify('This project has 12 layouts. Remove one before keeping this arrangement.');return false;}
+      if(current.layouts.length>=12){notify('This project has 12 layouts. Delete one, then ask again.');return false;}
       const accepted=commit(p=>{p.layouts.push(structuredClone(proposed));p.activeLayoutId=proposed.id;});
-      if(accepted){agentLayout.current=null;notify('Layout saved. Undo returns to the previous layout.');}
+      if(accepted){agentLayout.current=null;clearAsked();notify('Layout saved. Undo returns to the previous layout.');}
       return accepted;
     }
     if(!current.layouts.some(l=>l.id===targetId)){notify('That saved layout is no longer available.');return false;}
     if(current.activeLayoutId===targetId)return true;
     const accepted=commit(p=>{p.activeLayoutId=targetId;});
-    if(accepted)notify('Layout switched. Undo returns to the previous layout.');
+    if(accepted){clearAsked();notify('Layout switched. Undo returns to the previous layout.');}
     return accepted;
   });
   const presenting=Boolean(walkthrough.view&&!walkthrough.view.finished);
-  const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState(''),[agentBusy,setAgentBusy]=useState(false);
-  const startPreset=(targetId:string,request?:string)=>{
+  const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState<LayoutAgentReply|null>(null),agentInput=useRef<HTMLInputElement>(null),[agentBusy,setAgentBusy]=useState(false);
+  const agentAbort=useRef<AbortController|null>(null),movedOn=useRef(false);
+  const startPreset=(targetId:string,request?:string,byAgent=false)=>{
     const current=projectRef.current,target=current.layouts.find(l=>l.id===targetId);
     if(!target||(!presenting&&current.activeLayoutId===targetId))return;
     if(presenting&&walkthrough.view?.plan.toId===targetId)return;
     const snapshot=walkthrough.snapshot(),from=snapshot&&presenting?{...snapshot,id:'current-view',name:'Current view'}:current.layouts.find(l=>l.id===current.activeLayoutId)!;
     setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
-    walkthrough.start(from,target,current.room,request);
+    walkthrough.start(from,target,current.room,request,undefined,byAgent);
   };
-  const useRules=(request:string,prefix='')=>{
+  const useRules=(request:string,note='Keyword rules')=>{
     const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room);
-    setLayoutReply(prefix+match.reply);
+    setLayoutReply({text:match.reply,meta:note});
     if(match.targetId)startPreset(match.targetId,request);
   };
-  const askLayout=async(event:FormEvent)=>{
-    event.preventDefault();
-    const request=layoutRequest.trim(),asked=projectRef.current;
+  const stopAgent=()=>{agentAbort.current?.abort();agentAbort.current=null;setAgentBusy(false);};
+  const cancelWalkthrough=()=>{if(!walkthrough.current.current?.completed)setLayoutReply(null);walkthrough.close();};
+  const askLayout=async(text:string)=>{
+    const request=text.trim(),asked=projectRef.current;
     if(!request||agentBusy||presenting)return;
-    setAgentBusy(true);setLayoutReply('Asking the room agent…');
+    if(asked.layouts.length>=12){useRules(request,'12 layouts reached · delete one to use the agent');return;}
+    if(walkthrough.view)walkthrough.close();
+    const controller=new AbortController();agentAbort.current=controller;
+    setAgentBusy(true);setLayoutReply(null);
+    const stale=()=>movedOn.current||projectRef.current!==asked;
+    const movedAway=()=>setLayoutReply({text:'You moved on while the agent was working, so nothing changed. Ask again when you are ready.'});
     let result:LayoutAgentResult;
-    try{result=await studioRequest<LayoutAgentResult>('/api/layout-agent',{method:'POST',body:JSON.stringify({request,project:asked}),signal:AbortSignal.timeout(60000)});}
-    catch{setAgentBusy(false);useRules(request,'The room agent is unavailable, so a saved layout was matched by rule. ');return;}
+    try{
+      const reply=await studioRequest<unknown>('/api/layout-agent',{method:'POST',body:JSON.stringify({request,project:asked}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(70000)])});
+      result=readLayoutAgentResult(reply,asked);
+    }catch{
+      if(controller.signal.aborted)return;
+      setAgentBusy(false);
+      if(stale())movedAway();else useRules(request,'Agent unavailable · keyword rules');
+      return;
+    }
+    if(controller.signal.aborted)return;
     setAgentBusy(false);
+    if(stale()){movedAway();return;}
     const current=projectRef.current,from=current.layouts.find(l=>l.id===current.activeLayoutId)!;
-    if(current!==asked){setLayoutReply('The room changed while the agent was working. Ask again.');return;}
-    setLayoutReply(`${result.reply} ${result.provider} · ${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`);
-    if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request);
+    setLayoutReply({text:result.reply,meta:`${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`});
+    if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request,true);
     if(result.action==='rearrange'){
       agentLayout.current=result.layout;
-      setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
-      walkthrough.start(from,result.layout,current.room,request,result.reasons);
+      setSelectedId(null);setMobilePanel(null);setExportOpen(false);
+      walkthrough.start(from,result.layout,current.room,request,result.reasons,true);
     }
+  };
+  const deleteLayout=(id:string)=>{
+    const target=projectRef.current.layouts.find(l=>l.id===id);
+    if(!target||id==='original'||presenting)return;
+    walkthrough.close();setReplacementDraft(null);setProductPreview(null);setSelectedId(null);setLayoutReply(null);
+    if(commit(p=>{p.layouts=p.layouts.filter(l=>l.id!==id);if(p.activeLayoutId===id)p.activeLayoutId=p.layouts[0].id;}))notify(`${target.name} deleted. Undo brings it back.`);
   };
   const editLayout = useCallback(
     (mutate: (l: Layout) => void) =>
@@ -506,9 +530,9 @@ export default function App() {
     }
   }, [selected, replacementDraft, productPreview, productOpen, costOpen, modal, editLayout, notify]);
   const undo = useCallback(() => {
-    if(presenting){walkthrough.close();return;}
+    if(presenting){cancelWalkthrough();return;}
     if (!past.length) return;
-    walkthrough.close();
+    walkthrough.close();setLayoutReply(null);
     setFuture((f) => [clone(project), ...f]);
     setProject(past[past.length - 1]);
     setPast((p) => p.slice(0, -1));
@@ -540,11 +564,13 @@ export default function App() {
         )
       )
         return;
+      if(agentBusy&&e.key==='Escape'){e.preventDefault();stopAgent();return;}
       if(presenting){
-        if(e.key==='Escape'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z')){e.preventDefault();walkthrough.close();}
+        if(e.key==='Escape'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z')){e.preventDefault();cancelWalkthrough();}
         else if(e.code==='Space'){e.preventDefault();walkthrough.toggle();}
         return;
       }
+      if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&!modal&&!productOpen&&!costOpen&&!replacementDraft&&!productPreview){e.preventDefault();agentInput.current?.focus();return;}
       if (productOpen || costOpen) { if (e.key === "Escape") { setProductOpen(false); setCostOpen(false); } return; }
       if (productPreview) { if (e.key === "Escape") { setProductPreview(null); setMobilePanel(null); } return; }
       if (replacementDraft && e.key !== "Escape") return;
@@ -580,7 +606,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, redo, selected, editItem, replacementDraft, productPreview, productOpen, costOpen, modal, deleteSelected,presenting]);
+  }, [undo, redo, selected, editItem, replacementDraft, productPreview, productOpen, costOpen, modal, deleteSelected,presenting,agentBusy]);
   useEffect(
     () => () => {
       referencesRef.current.forEach((r) => URL.revokeObjectURL(r.url));
@@ -588,15 +614,16 @@ export default function App() {
     },
     [],
   );
+  movedOn.current=Boolean(walkthrough.view||modal||productOpen||costOpen||replacementDraft||productPreview||mode==='walk');
   const sceneState = useMemo<SceneState>(
     () => ({
       room: project.room,
-      layout: layoutFrame.current?.layout ?? (productPreview && productPreview.layoutId === layout.id && showReplacement
+      layout: (presenting?layoutFrame.current?.layout:null) ?? (productPreview && productPreview.layoutId === layout.id && showReplacement
         ? { ...layout, items: productPreview.originalId ? layout.items.map(i => i.id === productPreview.originalId ? productPreview.candidate : i) : [...layout.items, productPreview.candidate] }
         : replacementDraft && showReplacement ? previewReplacement(layout, replacementDraft) : layout),
       presentation:presenting,
       ghostItem: productPreview && showReplacement ? layout.items.find(i => i.id === productPreview.originalId) ?? null : replacementDraft && showReplacement ? selected : null,
-      selectedId: layoutFrame.current?.itemId ?? (productPreview ? productPreview.candidate.id : selectedId),
+      selectedId: (presenting?layoutFrame.current?.itemId:null) ?? (productPreview ? productPreview.candidate.id : selectedId),
       mode,
       wallsVisible,
       showClearances:presenting?false:showClearances,
@@ -994,6 +1021,7 @@ export default function App() {
               </small>
             </div>
           )}
+          <LayoutAgentComposer ref={agentInput} value={layoutRequest} busy={agentBusy} disabled={presenting} hidden={presenting||mode==='walk'||!!replacementDraft||!!productPreview} reply={layoutReply} onStop={stopAgent} canReset={project.activeLayoutId!=='original'&&project.layouts.some(l=>l.id==='original')} onChange={setLayoutRequest} onAsk={askLayout} onDismiss={()=>setLayoutReply(null)}/>
           <div className="stage-bottom">
             <div className="view-options">
               <button
@@ -1065,7 +1093,7 @@ export default function App() {
         <aside
           className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""} ${walkthrough.view?'walkthrough-panel':''}`}
         >
-          {walkthrough.view ? <LayoutExplainerPanel {...walkthrough.view} onToggle={walkthrough.toggle} onNext={walkthrough.next} onPrevious={walkthrough.previous} onReplay={walkthrough.replay} onClose={walkthrough.close} onFinish={walkthrough.finish} onSeek={walkthrough.seek} onSpeed={walkthrough.speed}/> : productPreview && productPreview.layoutId === layout.id ? (
+          {walkthrough.view ? <LayoutExplainerPanel {...walkthrough.view} onToggle={walkthrough.toggle} onNext={walkthrough.next} onPrevious={walkthrough.previous} onReplay={walkthrough.replay} onClose={cancelWalkthrough} onFinish={walkthrough.finish} onSeek={walkthrough.seek} onSpeed={walkthrough.speed}/> : productPreview && productPreview.layoutId === layout.id ? (
             <ProductPreviewPanel product={productPreview.product} candidate={productPreview.candidate} original={layout.items.find(i => i.id === productPreview.originalId) ?? null} layout={layout} room={project.room} showAfter={showReplacement} onCompare={setShowReplacement} onFocus={() => controller.current?.focusItem?.(productPreview.candidate.id)} onBack={() => { const preview = productPreview; setProductPreview(null); openProducts(layout.items.find(i => i.id === preview.originalId) ?? null, preview.product.id); }} onConfirm={() => {
               const preview = productPreview;
               if (preview.layoutId !== layout.id || (preview.originalId && (!layout.items.some(i => i.id === preview.originalId) || layout.items.find(i => i.id === preview.originalId)?.locked))) { notify("The layout changed. Review this product again before using it."); return; }
@@ -1546,19 +1574,12 @@ export default function App() {
         <div className="layouts-intro">
           <span className="eyebrow">SAME ROOM, NEW POSSIBILITIES</span>
           <h2>Find your flow.</h2>
-          <p>Choose a layout, or say what you want. Watch it come together.</p>
+          <p>Choose a layout. Watch it come together.</p>
         </div>
-        <form className="layout-prompt" onSubmit={askLayout}>
-            <div className="layout-prompt-row">
-              <input aria-label="Describe what you want from this room" value={layoutRequest} maxLength={200} disabled={agentBusy||presenting} placeholder="My room feels cluttered, I need more space" onChange={e=>setLayoutRequest(e.target.value)}/>
-              <button type="submit" aria-label="Rearrange the room" disabled={!layoutRequest.trim()||agentBusy||presenting}><ArrowUpRight size={16}/></button>
-            </div>
-            <p aria-live="polite">{layoutReply}</p>
-        </form>
         <div className="layout-cards">
           {project.layouts.map((l, index) => (
+            <div className="layout-card-wrap" key={l.id}>
             <button
-              key={l.id}
               className={`layout-card ${l.id === layout.id ? "active" : ""}`}
               aria-label={`Switch to ${l.name}`}
               aria-pressed={l.id === layout.id}
@@ -1582,6 +1603,8 @@ export default function App() {
                 )}
               </span>
             </button>
+            {l.id!=='original'&&<button className="layout-delete" aria-label={`Delete ${l.name}`} disabled={presenting} onClick={()=>deleteLayout(l.id)}><X size={12}/></button>}
+            </div>
           ))}
           <button
             className="new-layout-card"

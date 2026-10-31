@@ -11,8 +11,8 @@ import type {
 import { isSupportedAssetId } from './catalog';
 
 const EPS = 1e-6;
-const MAX_ITEMS = 80;
-const KINDS: ItemKind[] = [
+export const MAX_ITEMS = 80;
+export const KINDS: ItemKind[] = [
   "bed",
   "wardrobe",
   "desk",

@@ -9,6 +9,7 @@ export interface LayoutExplainerPanelProps {
   elapsedMs: number;
   playing: boolean;
   finished: boolean;
+  completed: boolean;
   speed: number;
   onToggle: () => void;
   onNext: () => void;
@@ -24,7 +25,7 @@ function seconds(ms: number): string {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
 
-export default function LayoutExplainerPanel({plan,stepIndex,elapsedMs,playing,finished,speed,onToggle,onNext,onPrevious,onReplay,onClose,onFinish,onSeek,onSpeed}:LayoutExplainerPanelProps) {
+export default function LayoutExplainerPanel({plan,stepIndex,elapsedMs,playing,finished,completed,speed,onToggle,onNext,onPrevious,onReplay,onClose,onFinish,onSeek,onSpeed}:LayoutExplainerPanelProps) {
   const total=Math.max(0,plan.totalDurationMs),elapsed=Math.min(total,Math.max(0,elapsedMs));
   const current=Math.max(0,Math.min(plan.steps.length-1,stepIndex));
   const step=plan.steps[current];
@@ -35,7 +36,7 @@ export default function LayoutExplainerPanel({plan,stepIndex,elapsedMs,playing,f
   return <section className="layout-explainer" aria-labelledby="layout-walkthrough-heading">
     <header className="le-header">
       <span className="le-eyebrow">Layout walkthrough</span>
-      <button className="le-icon" type="button" onClick={onClose} aria-label={finished?'Close layout walkthrough':'Cancel layout walkthrough'}><X size={18}/></button>
+      <button className="le-icon" type="button" onClick={onClose} aria-label={completed?'Close layout walkthrough':'Cancel layout walkthrough'}><X size={18}/></button>
       <h2 id="layout-walkthrough-heading">{plan.title}</h2>
       {plan.request&&<blockquote className="le-request">“{plan.request}”</blockquote>}
     </header>
@@ -62,8 +63,8 @@ export default function LayoutExplainerPanel({plan,stepIndex,elapsedMs,playing,f
       </div>
       {plan.steps.length>0&&<ol className="le-step-list" aria-label="Layout changes">{plan.steps.map((item,index)=><li key={item.id??index}><button type="button" onClick={()=>onSeek(offsets[index])} className={index===current&&!finished?'is-current':''} aria-current={index===current&&!finished?'step':undefined} aria-label={`Go to step ${index+1}: ${item.title}`}><span className={`le-step-number ${index<current||finished?'is-done':''}`}>{index<current||finished?<Check size={12}/>:index+1}</span><span>{item.title}</span><span className="le-step-duration">{seconds(item.durationMs)}</span></button></li>)}</ol>}
       {(plan.summary||plan.warnings.length>0)&&<div className="le-notes"><strong>Keep in mind</strong><ul><li>{plan.summary}</li>{plan.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul></div>}
-      <p className="le-local-note">{plan.steps.some(item=>item.agentReason)?<>Arranged by the room agent.<br/>Every move passed the room checks; figures are measured here.</>:<>Prepared layouts · plays on your device.<br/>No AI calls for layout playback.</>}</p>
+      <p className="le-local-note">{plan.byAgent?<>Chosen by the room agent.<br/>{plan.steps.some(item=>item.agentReason)?'Every change passed the room checks; figures are measured here.':'Figures are measured here.'}</>:<>Prepared layouts · plays on your device.<br/>No AI calls for layout playback.</>}</p>
     </div>
-    <footer className="le-footer">{finished?<button className="le-finish" type="button" onClick={onClose}>Close walkthrough <Check size={16}/></button>:<><button className="le-finish" type="button" onClick={onFinish}>{plan.steps.length?'Skip to layout':'Use this layout'} <SkipForward size={16}/></button><button className="le-text-button" type="button" onClick={onClose}>Cancel walkthrough</button></>}</footer>
+    <footer className="le-footer">{completed?<button className="le-finish" type="button" onClick={onClose}>Close walkthrough <Check size={16}/></button>:<><button className="le-finish" type="button" onClick={onFinish}>{plan.steps.length?'Skip to layout':'Use this layout'} <SkipForward size={16}/></button><button className="le-text-button" type="button" onClick={onClose}>Cancel walkthrough</button></>}</footer>
   </section>;
 }
