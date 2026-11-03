@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createFurnitureItem, createInitialProject, upgradeRetiredPresets, validateLayout } from '../src/domain';
+import { createFurnitureItem, createInitialProject, createRetailProject, getFootprint, upgradeRetiredPresets, validateLayout } from '../src/domain';
 import { buildLayoutExplanation, openFloorArea, sampleLayoutExplanation, sampleLayoutTransition, shortestYawDelta } from '../src/layout-explainer';
 import { matchLayoutIntent } from '../src/layout-intent';
-import type { Layout } from '../src/types';
+import type { ItemKind, Layout, RoomSpec } from '../src/types';
 
 const project = createInitialProject();
 const [original, airy, work] = project.layouts;
@@ -160,5 +160,122 @@ describe('typed layout requests', () => {
     const answer = ask('paint it purple');
     expect(answer.targetId).toBeUndefined();
     expect(answer.reply).toContain('Open & airy');
+  });
+});
+
+/** The original cell-by-cell measure, kept as the reference the faster one must match exactly. */
+function openFloorByCell(layout: Layout, room: RoomSpec): number {
+  const inside = (x: number, z: number, polygon: { x: number; z: number }[]) => {
+    let result = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const a = polygon[i], b = polygon[j];
+      if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) result = !result;
+    }
+    return result;
+  };
+  const cell = .05, columns = Math.round(room.width / cell), rows = Math.round(room.depth / cell);
+  const footprints = layout.items.filter(item => item.visible).map(getFootprint), heights = new Array<number>(columns).fill(0);
+  let best = 0;
+  for (let row = 0; row < rows; row++) {
+    const z = -room.depth / 2 + (row + .5) * cell, stack: number[] = [];
+    for (let column = 0; column <= columns; column++) {
+      if (column < columns) {
+        const x = -room.width / 2 + (column + .5) * cell;
+        heights[column] = footprints.some(polygon => inside(x, z, polygon)) ? 0 : heights[column] + 1;
+      }
+      const height = column < columns ? heights[column] : 0;
+      while (stack.length && heights[stack[stack.length - 1]] >= height) {
+        const top = heights[stack.pop()!], left = stack.length ? stack[stack.length - 1] + 1 : 0;
+        best = Math.max(best, top * (column - left));
+      }
+      stack.push(column);
+    }
+  }
+  return best * cell * cell;
+}
+
+describe('open floor measure', () => {
+  it('gives the exact cell-by-cell result for presets, off-grid pieces and pieces past the walls', () => {
+    const retail = createRetailProject();
+    for (const { layouts, room } of [project, retail]) for (const layout of layouts) expect(openFloorArea(layout, room)).toBe(openFloorByCell(layout, room));
+    let seed = 7;
+    const random = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+    for (const { layouts, room } of [project, retail]) for (let round = 0; round < 12; round++) {
+      const items = Array.from({ length: 10 }, (_, index) => ({ ...createFurnitureItem((['desk', 'shelf', 'bed', 'plant'] as ItemKind[])[index % 4]), id: `piece-${index}`, position: { x: (random() - .5) * room.width * 1.1, z: (random() - .5) * room.depth * 1.1 }, rotation: round % 2 ? random() * Math.PI : Math.round(random() * 3) * Math.PI / 2 }));
+      const layout = { ...layouts[0], items };
+      expect(openFloorArea(layout, room)).toBe(openFloorByCell(layout, room));
+    }
+  });
+});
+
+describe('store wording', () => {
+  const store = createRetailProject(), [first, second] = store.layouts;
+  it('reads as a store, not a room or a bedroom', () => {
+    const plan = buildLayoutExplanation(first, second, store.room);
+    const words = [plan.summary, ...plan.warnings, ...plan.steps.flatMap(step => [step.title, step.description, step.why ?? ''])].join(' ');
+    expect(plan.steps.length).toBeGreaterThan(0);
+    expect(words).not.toMatch(/\b(rooms?|bed|bedroom|furniture)\b/i);
+    expect(plan.summary).toMatch(/fixture changes?|Store colours/);
+  });
+  it('describes taking out and adding a fixture in store terms, and keeps room wording for rooms', () => {
+    const counter = first.items.find(item => !item.locked)!;
+    const without = { ...structuredClone(first), id: 'without', items: first.items.filter(item => item.id !== counter.id) };
+    const whys = (from: Layout, to: Layout, room: RoomSpec) => buildLayoutExplanation(from, to, room).steps.map(step => step.why ?? '').join(' ');
+    expect(whys(first, without, store.room)).not.toContain('the room');
+    expect(buildLayoutExplanation(original, airy, project.room).summary).toContain('Room sizes are estimated');
+    expect(buildLayoutExplanation(original, airy, project.room).summary).toContain('furniture changes');
+  });
+});
+
+describe('typed store requests', () => {
+  const store = createRetailProject();
+  const named = (id: string, name: string, description: string): Layout => ({ ...structuredClone(store.layouts[0]), id, name, description });
+  const layouts = [named('original', 'Original', 'A familiar starting point'), named('launch', 'Launch night', 'Open floor for an event'), named('path', 'The path', 'A guided discovery journey')];
+  const ask = (prompt: string, active = 'original') => matchLayoutIntent(prompt, layouts, active, store.room);
+  it('finds event and journey layouts, even when the request says space', () => {
+    expect(ask('we are hosting an event').targetId).toBe('launch');
+    expect(ask('I want an event space').targetId).toBe('launch');
+    for (const prompt of ['more discovery', 'a customer journey', 'something guided', 'let people browse', 'better for browsing']) expect(ask(prompt).targetId).toBe('path');
+  });
+  it('works on the real store presets', () => {
+    const real = (prompt: string) => matchLayoutIntent(prompt, store.layouts, 'original', store.room).targetId;
+    expect(real('we are hosting an event')).toBe('open-event');
+    expect(real('a guided journey')).toBe('discovery-journey');
+    expect(real('more space')).toBe('open-event');
+    expect(matchLayoutIntent('reset', store.layouts, 'open-event', store.room).targetId).toBe('original');
+  });
+  it('still honours reset, named layouts and plain space requests', () => {
+    expect(ask('reset it', 'launch').targetId).toBe('original');
+    expect(ask('back to the original', 'path').targetId).toBe('original');
+    expect(ask('show the path').targetId).toBe('path');
+    expect(ask('it feels cramped').reply).toContain('largest open floor area');
+  });
+  it('offers store suggestions when nothing matches, and room ones for a room', () => {
+    expect(ask('paint it purple').reply).toContain('guided journey');
+    expect(ask('paint it purple').reply).not.toContain('a place to work');
+    expect(matchLayoutIntent('paint it purple', project.layouts, 'original', project.room).reply).toBe('I can only switch between saved layouts: Original, Open & airy, Work & rest. Try asking for more space, or for a place to work.');
+  });
+});
+
+describe('explicit space', () => {
+  const bedroom = createInitialProject();
+  it('wins over what the layouts contain', () => {
+    const [from, to] = bedroom.layouts;
+    expect(buildLayoutExplanation(from, to, bedroom.room).summary).toContain('furniture');
+    expect(buildLayoutExplanation(from, to, bedroom.room, 'retail').summary).toContain('fixture');
+    const store = createRetailProject();
+    expect(buildLayoutExplanation(store.layouts[0], store.layouts[1], store.room, 'room').summary).toContain('furniture');
+    expect(matchLayoutIntent('a place to work', bedroom.layouts, 'original', bedroom.room, 'retail').targetId).toBeUndefined();
+  });
+  it('does not treat a request to edit the store as a layout match', () => {
+    const store = createRetailProject(), ask = (request: string) => matchLayoutIntent(request, store.layouts, 'original', store.room, 'retail');
+    for (const request of ['Add another testing bar', 'remove the demo stand', 'change the test bars', 'move the testing bar', 'paint the event wall']) {
+      expect(ask(request).targetId).toBeUndefined();
+      expect(ask(request).reply).toMatch(/^I can only switch between saved layouts/);
+    }
+    for (const request of ['set it up for an event', 'change to the event setup', 'change the layout for an event']) expect(ask(request).targetId).toBe('open-event');
+  });
+  it('leaves a bedroom request with an edit verb as it was', () => {
+    expect(matchLayoutIntent('move things for work', bedroom.layouts, 'original', bedroom.room).targetId).toBe('work-rest');
   });
 });

@@ -1,5 +1,5 @@
-import { getFootprint, validateLayout } from './domain';
-import type { FurnitureItem, Layout, RoomSpec } from './types';
+import { getFootprint, kindsForSpace, validateLayout } from './domain';
+import type { FurnitureItem, Layout, RoomSpec, SpaceType } from './types';
 
 export interface LayoutExplanationStep {
   id: string;
@@ -74,26 +74,41 @@ function movement(from: FurnitureItem, to: FurnitureItem): string {
   return `Move ${directions.join(' and ')}.`;
 }
 
-function insideFootprint(x: number, z: number, polygon: { x: number; z: number }[]): boolean {
-  let inside = false;
+/** A layout holding any kind a home room cannot hold is a store. For callers that have layouts but no project. */
+export function spaceOfLayouts(...layouts: Layout[]): SpaceType {
+  const roomKinds = kindsForSpace('room');
+  return layouts.some(layout => layout.items.some(item => !roomKinds.includes(item.kind))) ? 'retail' : 'room';
+}
+/** Sorted x values where a footprint's edges cross the line at z, in the even-odd sense: a point is inside between each pair. */
+function crossings(z: number, polygon: { x: number; z: number }[]): number[] {
+  const xs: number[] = [];
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const a = polygon[i], b = polygon[j];
-    if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) inside = !inside;
+    if ((a.z > z) !== (b.z > z)) xs.push((b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x);
   }
-  return inside;
+  return xs.sort((a, b) => a - b);
 }
 /** Largest empty rectangle of floor in m², measured on a 5 cm grid from the furniture footprints. */
 export function openFloorArea(layout: Layout, room: RoomSpec): number {
-  const cell = .05, columns = Math.round(room.width / cell), rows = Math.round(room.depth / cell);
-  const footprints = layout.items.filter(item => item.visible).map(getFootprint), heights = new Array<number>(columns).fill(0);
+  const cell = .05, columns = Math.round(room.width / cell), rows = Math.round(room.depth / cell), originX = -room.width / 2;
+  const footprints = layout.items.filter(item => item.visible).map(getFootprint), heights = new Array<number>(columns).fill(0), blocked = new Uint8Array(columns);
   let best = 0;
   for (let row = 0; row < rows; row++) {
     const z = -room.depth / 2 + (row + .5) * cell, stack: number[] = [];
-    for (let column = 0; column <= columns; column++) {
-      if (column < columns) {
-        const x = -room.width / 2 + (column + .5) * cell;
-        heights[column] = footprints.some(polygon => insideFootprint(x, z, polygon)) ? 0 : heights[column] + 1;
+    blocked.fill(0);
+    // Each row marks only the cells between footprint edges, which keeps a large store as cheap as a small room.
+    for (const polygon of footprints) {
+      const xs = crossings(z, polygon);
+      for (let pair = 0; pair + 1 < xs.length; pair += 2) {
+        const last = Math.min(columns - 1, Math.ceil((xs[pair + 1] - originX) / cell));
+        for (let column = Math.max(0, Math.floor((xs[pair] - originX) / cell) - 1); column <= last; column++) {
+          const x = originX + (column + .5) * cell;
+          if (x >= xs[pair] && x < xs[pair + 1]) blocked[column] = 1;
+        }
       }
+    }
+    for (let column = 0; column <= columns; column++) {
+      if (column < columns) heights[column] = blocked[column] ? 0 : heights[column] + 1;
       const height = column < columns ? heights[column] : 0;
       while (stack.length && heights[stack[stack.length - 1]] >= height) {
         const top = heights[stack.pop()!], left = stack.length ? stack[stack.length - 1] + 1 : 0;
@@ -107,22 +122,23 @@ export function openFloorArea(layout: Layout, room: RoomSpec): number {
 function wallGap(item: FurnitureItem, room: RoomSpec): number {
   return Math.min(...getFootprint(item).flatMap(point => [room.width / 2 - Math.abs(point.x), room.depth / 2 - Math.abs(point.z)]));
 }
-function stepReason(step: LayoutExplanationStep, floorBefore: number, floorAfter: number, issuesBefore: number, issuesAfter: number, room: RoomSpec, targetName: string): string {
+function stepReason(step: LayoutExplanationStep, floorBefore: number, floorAfter: number, issuesBefore: number, issuesAfter: number, room: RoomSpec, targetName: string, place: string): string {
   const reasons: string[] = [], change = floorAfter - floorBefore;
   if (change >= .05) reasons.push(`Opens ${metres(change)} m² of continuous floor (${metres(floorBefore)} → ${metres(floorAfter)} m²).`);
   else if (change <= -.05) reasons.push(`On its own this takes ${metres(-change)} m² from the largest open area; it is part of the full ${targetName} arrangement.`);
   if (step.from && step.to && wallGap(step.from, room) - wallGap(step.to, room) >= .05) reasons.push(`Sits ${metres(wallGap(step.from, room) - wallGap(step.to, room))} m closer to the wall.`);
   if (issuesAfter < issuesBefore) reasons.push(`Clears ${issuesBefore - issuesAfter === 1 ? 'a placement finding' : `${issuesBefore - issuesAfter} placement findings`}.`);
   if (reasons.length) return reasons.join(' ');
-  if (!step.to) return 'Takes it out of the room.';
-  if (!step.from) return 'Adds it to the room.';
+  if (!step.to) return `Takes it out of the ${place}.`;
+  if (!step.from) return `Adds it to the ${place}.`;
   return step.kind === 'move' ? `Leaves the largest open area as it is; this is where ${targetName} puts it.` : 'Leaves the largest open area as it is.';
 }
 
 const intent = (layout: Layout) => layout.description.trim().replace(/[.!]+$/, '');
 /** A deterministic explanation of preset differences, not an optimization or physical motion simulation. */
-export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec): LayoutExplanationPlan {
+export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType): LayoutExplanationPlan {
   const before = itemMap(from), after = itemMap(to), steps: LayoutExplanationStep[] = [], warnings: string[] = [];
+  const retail = (space ?? spaceOfLayouts(from, to)) === 'retail', place = retail ? 'store' : 'room', Place = retail ? 'Store' : 'Room', pieces = retail ? 'fixture' : 'furniture';
   for (const item of from.items) {
     const target = after.get(item.id);
     if (!target) {
@@ -135,7 +151,7 @@ export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec)
       if (change.rotated) details.push(`Rotate ${Math.round(Math.abs(shortestYawDelta(item.rotation, target.rotation)) * 180 / Math.PI)}° along the shortest turn.`);
       if (change.resized) details.push(`Set width × depth × height to ${axes.map(axis => metres(target.dimensions[axis])).join(' × ')} m.`);
       if (change.recolored) details.push(`Change its colour from ${item.color} to ${target.color}.`);
-      if (change.geometry) details.push('Use the target layout’s furniture model and product association.');
+      if (change.geometry) details.push(`Use the target layout’s ${pieces} model and product association.`);
       if (change.visibility) details.push(target.visible ? 'Show this piece.' : 'Hide this piece.');
       if (change.metadata) details.push('Keep the name, lock and measurement labels stored in the target layout.');
       const spatialOnly = (change.moved || change.rotated) && !change.resized && !change.recolored && !change.geometry && !change.visibility && !change.metadata;
@@ -163,7 +179,7 @@ export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec)
     const floors = pending.map(step => openFloorArea(completedStep(reached, step), room));
     const index = floors.indexOf(Math.max(...floors)), [step] = pending.splice(index, 1);
     const next = completedStep(reached, step), nextIssues = validateLayout(next, room).length;
-    step.why = stepReason(step, reachedFloor, floors[index], reachedIssues, nextIssues, room, to.name);
+    step.why = stepReason(step, reachedFloor, floors[index], reachedIssues, nextIssues, room, to.name, place);
     steps.push(step);
     reached = next; reachedFloor = floors[index]; reachedIssues = nextIssues;
   }
@@ -175,7 +191,7 @@ export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec)
   if (unbounded > 8000) for (const step of steps) step.durationMs = Math.floor(step.durationMs * 8000 / unbounded);
   const startIssueCount = validateLayout(from, room).length, endIssueCount = validateLayout(to, room).length;
   const changes = steps.filter(step => step.kind !== 'finish').length;
-  const summary = `${changes ? `${changes} furniture ${changes === 1 ? 'change' : 'changes'}` : finishChanged ? 'Room colours change' : 'No visible furniture or colour changes'}. ${to.description.trim() ? `Intent: ${intent(to)}. ` : ''}Largest open floor: ${metres(startOpenFloor)} → ${metres(endOpenFloor)} m². Placement checks report ${startIssueCount} ${startIssueCount === 1 ? 'finding' : 'findings'} before and ${endIssueCount} in the target. Room sizes are estimated; this does not establish verified fit.`;
+  const summary = `${changes ? `${changes} ${pieces} ${changes === 1 ? 'change' : 'changes'}` : finishChanged ? `${Place} colours change` : `No visible ${pieces} or colour changes`}. ${to.description.trim() ? `Intent: ${intent(to)}. ` : ''}Largest open floor: ${metres(startOpenFloor)} → ${metres(endOpenFloor)} m². Placement checks report ${startIssueCount} ${startIssueCount === 1 ? 'finding' : 'findings'} before and ${endIssueCount} in the target. ${Place} sizes are estimated; this does not establish verified fit.`;
   if (steps.length) warnings.unshift('Animated movement illustrates the change; it does not verify a collision-free physical moving route.');
   return { id: `layout-explanation:${from.id}:${to.id}`, fromId: from.id, toId: to.id, title: `${from.name} → ${to.name}`, steps, totalDurationMs: steps.reduce((sum, step) => sum + step.durationMs, 0), summary, warnings, startIssueCount, endIssueCount, startOpenFloor, endOpenFloor };
 }

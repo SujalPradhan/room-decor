@@ -31,7 +31,8 @@ import type {
   ProductDraft,
   ProductWorkbenchProps,
 } from "./product-types";
-import type { ItemKind } from "./types";
+import type { ItemKind, SpaceType } from "./types";
+import { kindsForSpace } from "./domain";
 import "./product-ui.css";
 
 const KINDS: { value: ItemKind; label: string }[] = [
@@ -139,7 +140,12 @@ export default function ProductWorkbench({
   onCancelGeneration,
   autoStart,
   onSourceChange,
-}: ProductWorkbenchProps) {
+  space = "room",
+}: ProductWorkbenchProps & { space?: SpaceType }) {
+  const place = space === "retail" ? "store" : "room";
+  const spaceKinds = kindsForSpace(space);
+  const kindOptions = KINDS.filter((k) => spaceKinds.includes(k.value));
+  const fitsSpace = (p: ProductDraft) => !p.kind || spaceKinds.includes(p.kind);
   const [tab, setTab] = useState<"link" | "library">("link");
   const [draft, setDraft] = useState<ProductDraft>(() => {
     const saved = products.find((product) => product.id === initialProductId);
@@ -197,8 +203,11 @@ export default function ProductWorkbench({
     selectedImage && (detailsOpen || !url.trim() || [draft.source.submittedUrl,draft.source.canonicalUrl].includes(url.trim())) && isSafeProductImageUrl(selectedImage.url)
       ? selectedImage.url
       : null;
-  const reviewIssues = getProductReviewIssues(draft);
-  const ready = canTryProduct(draft);
+  const reviewIssues = [
+    ...(fitsSpace(draft) ? [] : ["This type of piece cannot go in a store. Choose another type."]),
+    ...getProductReviewIssues(draft).map((issue) => space === "retail" ? issue.replace("furniture type", "fixture type") : issue),
+  ];
+  const ready = canTryProduct(draft) && fitsSpace(draft);
   const allPresent = AXES.every((a) => draft.dimensions[a].metres !== null);
   const allConfirmed = AXES.every(
     (a) => draft.dimensions[a].confirmed && draft.dimensions[a].metres !== null,
@@ -282,7 +291,7 @@ export default function ProductWorkbench({
       if(epoch!==sourceEpoch.current||!alive.current)return;
       setBusy('generate');
       await onGenerate(product);
-      if(alive.current)setNotice('Creating your product model. It will be linked to your room automatically. You can keep arranging while it runs.');
+      if(alive.current)setNotice(`Creating your product model. It will be linked to your ${place} automatically. You can keep arranging while it runs.`);
     } catch(e){if(alive.current)setError(e instanceof Error?e.message:'Model creation could not start. Your link is saved.');}
     finally{starting.current=false;if(alive.current)setBusy(null);}
   };
@@ -339,7 +348,7 @@ export default function ProductWorkbench({
     }
   };
   const tryProduct = (product: ProductDraft) => {
-    if (!canTryProduct(product)) return;
+    if (!canTryProduct(product) || !fitsSpace(product)) return;
     try {
       onTry(product);
     } catch (e) {
@@ -392,8 +401,8 @@ export default function ProductWorkbench({
       >
         <header className="product-sheet-header">
           <div>
-            <span className="pw-eyebrow">MAKE ROOM FOR SOMETHING NEW</span>
-            <h2 id="product-workbench-title">Try a product in your room.</h2>
+            <span className="pw-eyebrow">{space === "retail" ? "MAKE SPACE" : "MAKE ROOM"} FOR SOMETHING NEW</span>
+            <h2 id="product-workbench-title">Try a product in your {place}.</h2>
             <p>
               {original ? (
                 <>
@@ -462,7 +471,7 @@ export default function ProductWorkbench({
                   {error && <button className="pw-button pw-primary" type="submit" disabled={Boolean(busy)||inProgress||!url.trim()}>Retry model <ArrowUpRight size={16}/></button>}
                 </form>
                 <p className="pw-hint">
-                  Paste the link. We collect the product photos and dimensions, create its 3D model and link it to your room automatically.
+                  Paste the link. We collect the product photos and dimensions, create its 3D model and link it to your {place} automatically.
                 </p>
                 <div className="pw-link-options">
                   {!session?.user && pipelineSession && <a className="pw-text-button" href="/signin-with-chatgpt?return_to=/" target="_top" onClick={signInWithDraft}>Sign in to create a model <ArrowUpRight size={13}/></a>}
@@ -480,8 +489,8 @@ export default function ProductWorkbench({
               <div className="pw-workbench-grid">
                 <section aria-label="Model progress">
                   <div className="pw-generation-status available" role="status" aria-live="polite">
-                    <span className="pw-status-title">{inProgress||busy ? <LoaderCircle size={17} className="spin"/> : <Package size={17}/>} {busy==='read'?'Reading product photos and dimensions':busy==='generate'?'Starting your model':inProgress?pipelineStageLabel(job?.stage??'queued'):draft.model.state==='ready'?'Your product model is ready':'Your product, in your room'}</span>
-                    <p>{inProgress?'You can close this panel and keep arranging. The finished model will be linked to your room automatically.':draft.model.state==='ready'?'The actual generated shape is saved with your product.':'Paste an Amazon or Flipkart product link above to begin. No measurements or furniture choices are needed.'}</p>
+                    <span className="pw-status-title">{inProgress||busy ? <LoaderCircle size={17} className="spin"/> : <Package size={17}/>} {busy==='read'?'Reading product photos and dimensions':busy==='generate'?'Starting your model':inProgress?pipelineStageLabel(job?.stage??'queued'):draft.model.state==='ready'?'Your product model is ready':`Your product, in your ${place}`}</span>
+                    <p>{inProgress?`You can close this panel and keep arranging. The finished model will be linked to your ${place} automatically.`:draft.model.state==='ready'?'The actual generated shape is saved with your product.':`Paste an Amazon or Flipkart product link above to begin. No measurements or ${space === "retail" ? "fixture" : "furniture"} choices are needed.`}</p>
                     {(inProgress||busy)&&<span className="pw-pipeline-track" aria-hidden="true"><span/></span>}
                     {draft.model.error&&<p className="pw-warning">{draft.model.error}</p>}
                     {onCancelGeneration&&inProgress&&(job?.id||draft.model.jobId)&&<button className="pw-text-button" onClick={async()=>{setAutoRequested(false);try{await onCancelGeneration((job?.id??draft.model.jobId)!);}catch(e){setError(e instanceof Error?e.message:'Could not cancel. Please try again.');}}}>Cancel model creation</button>}
@@ -523,7 +532,7 @@ export default function ProductWorkbench({
                       <select
                         aria-label="Product category"
                         disabled={Boolean(busy)}
-                        value={draft.kind ?? ""}
+                        value={fitsSpace(draft) ? (draft.kind ?? "") : ""}
                         onChange={(e) =>
                           patch({
                             kind: (e.target.value || null) as ItemKind | null,
@@ -531,7 +540,7 @@ export default function ProductWorkbench({
                         }
                       >
                         <option value="">Choose a type</option>
-                        {KINDS.map((k) => (
+                        {kindOptions.map((k) => (
                           <option key={k.value} value={k.value}>
                             {k.label}
                           </option>
@@ -821,7 +830,7 @@ export default function ProductWorkbench({
                   <h3>Your next piece starts here.</h3>
                   <p>
                     Save a product while you compare sizes and colours. Nothing
-                    is added to your room until you choose to try it.
+                    is added to your {place} until you choose to try it.
                   </p>
                   <button
                     className="pw-button pw-primary"
@@ -865,10 +874,10 @@ export default function ProductWorkbench({
                           </button>
                           <button
                             className="pw-button pw-primary"
-                            disabled={!canTryProduct(product)}
+                            disabled={!canTryProduct(product) || !fitsSpace(product)}
                             onClick={() => tryProduct(product)}
                           >
-                            Try in room <ArrowUpRight size={14} />
+                            Try in {place} <ArrowUpRight size={14} />
                           </button>
                         </div>
                       </article>
@@ -887,13 +896,13 @@ export default function ProductWorkbench({
                   ? "Ready to see how it fits"
                   : draft.title
                     ? "Check the product details above"
-                    : "Your room stays just as it is"}
+                    : `Your ${place} stays just as it is`}
               </strong>
               <span>
                 {ready
                   ? "Preview first. Keep it only when you’re happy."
                   : reviewIssues[0] ||
-                    "Save a piece for later, or preview it in your room."}
+                    `Save a piece for later, or preview it in your ${place}.`}
               </span>
             </div>
             <div className="pw-footer-actions">
@@ -909,7 +918,7 @@ export default function ProductWorkbench({
                 disabled={!ready || Boolean(busy)}
                 onClick={() => tryProduct(draft)}
               >
-                Try in room <ArrowUpRight size={16} />
+                Try in {place} <ArrowUpRight size={16} />
               </button>
             </div>
           </footer>

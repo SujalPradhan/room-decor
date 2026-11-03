@@ -10,9 +10,9 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import type { FurnitureItem, Layout, RoomSpec } from "./types";
+import type { FurnitureItem, Layout, RoomSpec, SpaceType } from "./types";
 import { ASSET_CATALOG } from "./catalog";
-import { createFurnitureItem } from "./domain";
+import { createFurnitureItem, kindsForSpace } from "./domain";
 import { createReplacementDraft, evaluateReplacement } from "./replacement";
 import { storeLocalModel, removeLocalModel } from "./local-assets";
 import DimensionInput from "./DimensionInput";
@@ -27,6 +27,7 @@ interface Props {
   candidate: FurnitureItem;
   layout: Layout;
   room: RoomSpec;
+  space?: SpaceType;
   showAfter: boolean;
   onCompare: (after: boolean) => void;
   onChange: (item: FurnitureItem) => void;
@@ -40,6 +41,7 @@ export default function ReplacementPanel({
   candidate,
   layout,
   room,
+  space = "room",
   showAfter,
   onCompare,
   onChange,
@@ -66,7 +68,16 @@ export default function ReplacementPanel({
     };
   }, []);
   const evaluation = evaluateReplacement(layout, room, candidate);
-  const options = ASSET_CATALOG.filter((a) => a.kind === category);
+  const allowedKinds = kindsForSpace(space);
+  const categories = [...new Set(ASSET_CATALOG.map((a) => a.kind))].filter(
+    (kind) => allowedKinds.includes(kind),
+  );
+  // Store fixtures have no catalogue entries, so the piece's own kind has to be added to stay selected.
+  if (space === "retail" && !categories.includes(original.kind))
+    categories.unshift(original.kind);
+  const options = ASSET_CATALOG.filter(
+    (a) => a.kind === category && allowedKinds.includes(a.kind),
+  );
   useEffect(
     () => () => {
       if (photo) URL.revokeObjectURL(photo);
@@ -171,13 +182,22 @@ export default function ReplacementPanel({
             value={category}
             onChange={(e) => setCategory(e.target.value as typeof category)}
           >
-            {[...new Set(ASSET_CATALOG.map((a) => a.kind))].map((kind) => (
+            {categories.map((kind) => (
               <option key={kind} value={kind}>
                 {kind.replaceAll("-", " ")}
               </option>
             ))}
           </select>
         </div>
+        {space === "retail" && !options.length && (
+          <div className="replacement-empty" role="status">
+            <strong>No store alternatives yet</strong>
+            <p>
+              Choose another type above, try a product link, or bring your own
+              3D model.
+            </p>
+          </div>
+        )}
         <div className="replacement-catalog">
           {options.map((entry) => (
             <button
@@ -327,7 +347,7 @@ export default function ReplacementPanel({
             </strong>
             <p>
               {evaluation.issues[0]?.message ??
-                "Room dimensions are estimated. Measure the available space before buying."}
+                `${space === "retail" ? "Store" : "Room"} dimensions are estimated. Measure the available space before buying.`}
             </p>
           </div>
         </div>
@@ -352,7 +372,7 @@ export default function ReplacementPanel({
         />
         {photo && (
           <figure className="candidate-reference">
-            <img src={photo} alt="Your furniture photo reference" />
+            <img src={photo} alt={`Your ${space === "retail" ? "fixture" : "furniture"} photo reference`} />
             <figcaption>
               Appearance reference · this session
               <button

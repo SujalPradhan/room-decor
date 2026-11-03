@@ -22,6 +22,7 @@ import type {
   OperationRecord,
   ProductDraft,
 } from "./product-types";
+import type { SpaceType } from "./types";
 import { handleProductTabs, useProductSheetFocus } from "./ProductWorkbench";
 import "./product-ui.css";
 
@@ -271,7 +272,9 @@ export default function CostTimePanel({
   roomId,
   roomName,
   onClose,
-}: CostTimePanelProps) {
+  space = "room",
+}: CostTimePanelProps & { space?: SpaceType }) {
+  const retail = space === "retail";
   const [tab, setTab] = useState<
     "overview" | "images" | "components" | "activity"
   >("overview");
@@ -420,7 +423,7 @@ export default function CostTimePanel({
           <div>
             <span className="pw-eyebrow">EVERY STEP, IN VIEW</span>
             <h2 id="cost-time-title">Cost & time</h2>
-            <p>Processing usage for your rooms, images and furniture.</p>
+            <p>Processing usage for your {retail ? "spaces, images and fixtures" : "rooms, images and furniture"}.</p>
           </div>
           <button
             className="pw-icon-button"
@@ -460,8 +463,8 @@ export default function CostTimePanel({
                 value={scope}
                 onChange={(e) => setScope(e.target.value as typeof scope)}
               >
-                <option value="room">This room · {roomName}</option>
-                <option value="all">All my rooms</option>
+                <option value="room">This {retail ? "store" : "room"} · {roomName}</option>
+                <option value="all">{retail ? "All my spaces" : "All my rooms"}</option>
               </select>
             </label>
             <button
@@ -742,8 +745,8 @@ export default function CostTimePanel({
             <section>
               <div className="ct-section-heading">
                 <div>
-                  <h3>Furniture and components</h3>
-                  <p>Work associated with each product or room component.</p>
+                  <h3>{retail ? "Fixtures" : "Furniture"} and components</h3>
+                  <p>Work associated with each product or {retail ? "store" : "room"} component.</p>
                 </div>
               </div>
               {!componentGroups.length ? (
@@ -751,7 +754,7 @@ export default function CostTimePanel({
                   <Layers3 size={31} strokeWidth={1} />
                   <h3>No component processing recorded.</h3>
                   <p>
-                    Your existing furniture is available to edit. Future imports
+                    Your existing {retail ? "fixtures are" : "furniture is"} available to edit. Future imports
                     and processing will be listed here.
                   </p>
                 </div>
@@ -766,7 +769,7 @@ export default function CostTimePanel({
                     <section className="ct-component-group" key={group.id}>
                       <div className="ct-section-heading">
                         <h4>
-                          {product?.title || `Room component ${index + 1}`}
+                          {product?.title || `${retail ? "Store" : "Room"} component ${index + 1}`}
                         </h4>
                         <span>
                           {group.records.length} operation

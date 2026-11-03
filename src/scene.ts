@@ -8,10 +8,11 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { createSurfaceLibrary, type SurfaceKind } from "./realism-surfaces";
 import { getLocalModel } from "./local-assets";
 import { getCatalogAsset } from "./catalog";
-import { canStand } from "./domain";
+import { canStand, getFootprint } from "./domain";
 import type {
   FurnitureItem,
   ItemKind,
@@ -107,6 +108,123 @@ function rod(
   o.position.copy(a).add(b).multiplyScalar(0.5);
   o.quaternion.setFromUnitVectors(UP, b.clone().sub(a).normalize());
   return o;
+}
+
+/** Space decides the renderer, never floor area: a small store is still a store and a big bedroom still a bedroom. */
+const isStore = (state: SceneState) => state.space === "retail";
+/** Pixels the floating stage UI covers in the default store view. Matches .layout-prompt in layout-explainer.css plus a margin. */
+const storeInsets = (hostWidth: number) =>
+  hostWidth < 700
+    ? { top: 96, bottom: 204, side: 14 }
+    : { top: 100, bottom: 164, side: 28 };
+const glow = () => new THREE.MeshBasicMaterial({ color: "#fff0d8" });
+const mirror = () => material("#e8efee", 0.14, 0.55);
+const brass = () => material("#b79560", 0.32, 0.75);
+function lit(o: THREE.Mesh) {
+  o.castShadow = false;
+  return o;
+}
+function tinted(color: string, lightness: number) {
+  return material(new THREE.Color(color).offsetHSL(0, 0, lightness).getHex());
+}
+const PRODUCT_TONES = [
+  "#e6c4b8",
+  "#c5837a",
+  "#f3ece2",
+  "#94595f",
+  "#d8b28c",
+  "#6c4852",
+];
+const painted = (geometry: THREE.BufferGeometry, color: string) => {
+  const c = new THREE.Color(color),
+    count = geometry.attributes.position.count,
+    colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) colors.set([c.r, c.g, c.b], i * 3);
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+};
+/** One merged mesh per fixture keeps a stocked store to a few draw calls. Slots are product bases. */
+function products(
+  group: THREE.Object3D,
+  slots: number[][],
+  height: number,
+  seed = 0,
+) {
+  const parts: THREE.BufferGeometry[] = [];
+  const add = (
+    geometry: THREE.BufferGeometry,
+    color: string,
+    x: number,
+    y: number,
+    z: number,
+  ) => parts.push(painted(geometry, color).translate(x, y, z));
+  slots.forEach(([x, y, z], i) => {
+    const shape = (i + seed) % 4,
+      tone = PRODUCT_TONES[(i * 5 + seed) % PRODUCT_TONES.length],
+      r = height * 0.2;
+    if (shape === 0) {
+      add(new THREE.CylinderGeometry(r, r, height * 0.72, 10), tone, x, y + height * 0.36, z);
+      add(new THREE.CylinderGeometry(r * 0.55, r * 0.55, height * 0.28, 10), "#b79560", x, y + height * 0.86, z);
+    } else if (shape === 1) {
+      add(new THREE.CylinderGeometry(r * 1.5, r * 1.5, height * 0.34, 12), tone, x, y + height * 0.17, z);
+      add(new THREE.CylinderGeometry(r * 1.55, r * 1.55, height * 0.14, 12), "#f3ece2", x, y + height * 0.41, z);
+    } else if (shape === 2) {
+      add(new THREE.BoxGeometry(r * 2.1, height * 0.82, r * 1.3), tone, x, y + height * 0.41, z);
+    } else {
+      add(new THREE.CylinderGeometry(r * 0.62, r * 0.62, height * 0.56, 8), "#3c3431", x, y + height * 0.28, z);
+      add(new THREE.CylinderGeometry(r * 0.46, r * 0.5, height * 0.34, 8), tone, x, y + height * 0.73, z);
+    }
+  });
+  const merged = mergeGeometries(parts);
+  parts.forEach((part) => part.dispose());
+  const mat = material("#ffffff", 0.34, 0.04);
+  mat.vertexColors = true;
+  return mesh(group, merged, mat);
+}
+const productRow = (
+  span: number,
+  y: number,
+  z: number,
+  count: number,
+  offset = 0,
+) =>
+  Array.from({ length: count }, (_, i) => [
+    offset + span * ((i + 0.5) / count - 0.5),
+    y,
+    z,
+  ]);
+/** Vertical fluting along a front face, merged so a long counter stays one draw call. */
+function fluted(
+  group: THREE.Object3D,
+  width: number,
+  height: number,
+  y: number,
+  z: number,
+  mat: THREE.Material,
+) {
+  const count = Math.max(4, Math.round(width / 0.075)),
+    pitch = width / count;
+  const parts = Array.from({ length: count }, (_, i) =>
+    new THREE.CylinderGeometry(pitch * 0.46, pitch * 0.46, height, 8).translate(
+      -width / 2 + pitch * (i + 0.5),
+      y,
+      z,
+    ),
+  );
+  const merged = mergeGeometries(parts);
+  parts.forEach((part) => part.dispose());
+  return mesh(group, merged, mat);
+}
+function roundMirror(
+  group: THREE.Object3D,
+  radius: number,
+  x: number,
+  y: number,
+  z: number,
+) {
+  const face = cylinder(group, radius, radius, 0.012, mirror(), x, y, z, 40);
+  face.rotation.x = Math.PI / 2;
+  lit(mesh(group, new THREE.TorusGeometry(radius + 0.008, 0.011, 8, 40), glow(), x, y, z));
 }
 
 function buildFurniture(item: FurnitureItem): THREE.Group {
@@ -461,6 +579,174 @@ function buildFurniture(item: FurnitureItem): THREE.Group {
           material(["#c1ab85", "#65716b", "#9d7865", "#d6d1bb"][i]),
           [-w * 0.34 + i * 0.075, 0.07 + (row * (h - 0.08)) / 4 + 0.12, 0],
         );
+  } else if (item.kind === "display-table") {
+    const top = h - 0.17,
+      stone = material("#efe8de", 0.32);
+    box(g, [w * 0.7, 0.05, d * 0.66], dark, [0, 0.025, 0]);
+    box(g, [w * 0.64, top - 0.11, d * 0.6], body, [0, 0.05 + (top - 0.11) / 2, 0], 0.02);
+    fluted(g, w * 0.64, top - 0.13, 0.05 + (top - 0.11) / 2, d * 0.3, body);
+    fluted(g, w * 0.64, top - 0.13, 0.05 + (top - 0.11) / 2, -d * 0.3, body);
+    box(g, [w, 0.06, d], stone, [0, top - 0.03, 0], 0.016);
+    box(g, [w * 0.98, 0.012, d * 0.98], brass(), [0, top - 0.066, 0]);
+    box(g, [w * 0.34, 0.05, d * 0.42], body, [-w * 0.24, top + 0.025, 0], 0.012);
+    box(g, [w * 0.2, 0.09, d * 0.3], cream, [w * 0.26, top + 0.045, -d * 0.12], 0.012);
+    products(
+      g,
+      [
+        ...productRow(w * 0.3, top + 0.05, -d * 0.1, 4, -w * 0.24),
+        ...productRow(w * 0.3, top + 0.05, d * 0.1, 4, -w * 0.24),
+      ],
+      0.12,
+    );
+    products(
+      g,
+      [
+        ...productRow(w * 0.17, top + 0.09, -d * 0.12, 3, w * 0.26),
+        ...productRow(w * 0.42, top, d * 0.3, 7, w * 0.16),
+      ],
+      0.08,
+      2,
+    );
+  } else if (item.kind === "wall-display") {
+    const header = 0.2,
+      plinth = 0.56,
+      bays = 3,
+      shelfMat = material("#f4eee5", 0.42),
+      shelves = (h - header - plinth) / bays;
+    box(g, [w, h, 0.05], tinted(item.color, -0.05), [0, h / 2, -d / 2 + 0.025]);
+    for (const x of [-w / 2 + 0.02, 0, w / 2 - 0.02])
+      box(g, [0.04, h - header, d * 0.86], body, [x, (h - header) / 2, -d * 0.07]);
+    box(g, [w, plinth, d], body, [0, plinth / 2, 0], 0.012);
+    for (const x of [-w * 0.25, w * 0.25]) {
+      box(g, [w * 0.47, plinth - 0.14, 0.018], tinted(item.color, 0.03), [x, plinth / 2 + 0.02, d / 2 + 0.001]);
+      box(g, [0.14, 0.012, 0.02], brass(), [x, plinth - 0.1, d / 2 + 0.012]);
+    }
+    box(g, [w, header, d * 0.92], dark, [0, h - header / 2, -d * 0.04], 0.012);
+    lit(box(g, [w * 0.92, 0.018, 0.02], glow(), [0, h - header - 0.012, d * 0.24]));
+    for (let i = 0; i < bays; i++) {
+      const y = plinth + i * shelves;
+      if (i) box(g, [w - 0.04, 0.03, d * 0.82], shelfMat, [0, y, -d * 0.07]);
+      lit(box(g, [w * 0.92, 0.008, 0.012], glow(), [0, y + shelves - 0.05, d * 0.17]));
+      for (const side of [-1, 1])
+        products(
+          g,
+          [
+            ...productRow(w * 0.42, y + 0.016, -d * 0.2, 6, (side * w) / 4),
+            ...productRow(w * 0.42, y + 0.016, d * 0.08, 5, (side * w) / 4),
+          ],
+          0.26 - i * 0.02,
+          i * 3 + side + 1,
+        );
+    }
+  } else if (item.kind === "testing-bar") {
+    const top = 0.92,
+      stone = material("#f1ebe2", 0.24),
+      kick = 0.09;
+    box(g, [w * 0.97, kick, d * 0.86], dark, [0, kick / 2, 0]);
+    box(g, [w * 0.97, top - kick - 0.05, d * 0.9], body, [0, (top - 0.05 + kick) / 2, 0], 0.02);
+    fluted(g, w * 0.97, top - kick - 0.05, (top - 0.05 + kick) / 2, d * 0.45, body);
+    box(g, [w, 0.05, d], stone, [0, top - 0.025, 0], 0.016);
+    box(g, [w * 0.86, h - top, 0.04], tinted(item.color, -0.06), [0, (h + top) / 2, -d * 0.36], 0.012);
+    for (const x of [-w * 0.3, 0, w * 0.3]) {
+      roundMirror(g, Math.min(0.17, (h - top) * 0.42), x, top + (h - top) * 0.52, -d * 0.325);
+      box(g, [w * 0.2, 0.02, d * 0.34], material("#d8c9b8", 0.5), [x, top + 0.01, d * 0.14], 0.008);
+      products(
+        g,
+        [
+          ...productRow(w * 0.17, top + 0.02, d * 0.06, 5, x),
+          ...productRow(w * 0.17, top + 0.02, d * 0.22, 5, x),
+        ],
+        0.09,
+        Math.round(x * 4) + 2,
+      );
+    }
+    lit(box(g, [w * 0.86, 0.012, 0.02], glow(), [0, top + 0.012, -d * 0.31]));
+  } else if (item.kind === "consultation-station") {
+    const top = 0.76,
+      stone = material("#f1ebe2", 0.26),
+      pedestal = w * 0.24;
+    for (const side of [-1, 1]) {
+      const x = side * (w / 2 - pedestal / 2);
+      box(g, [pedestal, top - 0.04, d * 0.9], body, [x, (top - 0.04) / 2, 0], 0.014);
+      for (const y of [0.2, 0.46])
+        box(g, [0.12, 0.012, 0.018], brass(), [x, y, d * 0.46]);
+    }
+    box(g, [w, 0.04, d], stone, [0, top - 0.02, 0], 0.014);
+    box(g, [w, h - top, 0.05], tinted(item.color, -0.05), [0, (h + top) / 2, -d / 2 + 0.03], 0.014);
+    const glass = box(g, [w * 0.44, (h - top) * 0.62, 0.012], mirror(), [0, top + (h - top) * 0.33, -d / 2 + 0.062]);
+    glass.castShadow = false;
+    const crown = cylinder(g, w * 0.22, w * 0.22, 0.012, mirror(), 0, top + (h - top) * 0.64, -d / 2 + 0.062, 40);
+    crown.rotation.x = Math.PI / 2;
+    for (const x of [-w * 0.3, w * 0.3])
+      lit(box(g, [0.026, (h - top) * 0.72, 0.018], glow(), [x, top + (h - top) * 0.46, -d / 2 + 0.064]));
+    const tablet = box(g, [0.24, 0.17, 0.012], dark, [w * 0.33, top + 0.1, -d * 0.1], 0.005);
+    tablet.rotation.x = -0.32;
+    box(g, [w * 0.2, 0.02, d * 0.3], material("#d8c9b8", 0.5), [-w * 0.3, top + 0.01, d * 0.02], 0.008);
+    products(g, productRow(w * 0.18, top + 0.02, d * 0.02, 5, -w * 0.3), 0.1, 1);
+  } else if (item.kind === "hero-plinth") {
+    const m = Math.min(w, d),
+      round = new THREE.Group(),
+      stone = material("#efe8de", 0.3),
+      stage = h * 0.56;
+    round.scale.set(w / m, 1, d / m);
+    g.add(round);
+    cylinder(round, m * 0.5, m * 0.5, 0.1, dark, 0, 0.05, 0, 48);
+    lit(cylinder(round, m * 0.47, m * 0.47, 0.012, glow(), 0, 0.106, 0, 48));
+    cylinder(round, m * 0.44, m * 0.44, 0.14, stone, 0, 0.18, 0, 48);
+    cylinder(round, m * 0.36, m * 0.36, stage - 0.25, body, 0, (stage + 0.25) / 2, 0, 48);
+    mesh(round, new THREE.TorusGeometry(m * 0.36, 0.012, 8, 48), brass(), 0, stage, 0).rotation.x = Math.PI / 2;
+    const dome = new THREE.MeshPhysicalMaterial({
+      color: "#f4f6f2",
+      roughness: 0.06,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    lit(cylinder(round, m * 0.3, m * 0.3, h - stage - 0.03, dome, 0, (h + stage - 0.03) / 2, 0, 40));
+    cylinder(round, m * 0.31, m * 0.31, 0.03, brass(), 0, h - 0.015, 0, 40);
+    cylinder(round, m * 0.31, m * 0.31, 0.02, stone, 0, stage + 0.01, 0, 40);
+    const heroH = (h - stage) * 0.72;
+    box(round, [m * 0.26, heroH * 0.68, m * 0.16], tinted(item.color, 0.12), [0, stage + 0.02 + heroH * 0.34, 0], 0.03);
+    cylinder(round, m * 0.065, m * 0.08, heroH * 0.3, brass(), 0, stage + 0.02 + heroH * 0.83, 0, 20);
+  } else if (item.kind === "checkout-counter") {
+    const worktop = h - 0.2,
+      stone = material("#efe8de", 0.26),
+      kick = 0.09,
+      bodyH = worktop - kick - 0.04,
+      bodyY = kick + bodyH / 2;
+    box(g, [w * 0.97, kick, d * 0.88], material("#2a2726"), [0, kick / 2, 0]);
+    box(g, [w * 0.97, bodyH, d * 0.92], body, [0, bodyY, 0], 0.02);
+    fluted(g, w * 0.97, bodyH, bodyY, d * 0.46, body);
+    box(g, [w, 0.04, d], stone, [0, worktop - 0.02, 0], 0.014);
+    box(g, [w * 0.98, 0.012, d * 0.98], brass(), [0, worktop - 0.046, 0]);
+    box(g, [w, h - worktop - 0.04, 0.08], body, [0, (h + worktop - 0.04) / 2, d * 0.38], 0.012);
+    box(g, [w, 0.03, 0.2], stone, [0, h - 0.035, d * 0.4], 0.012);
+    lit(box(g, [w * 0.92, 0.012, 0.012], glow(), [0, worktop + 0.01, d * 0.32]));
+    for (const x of [-w * 0.2, w * 0.2]) {
+      cylinder(g, 0.016, 0.03, 0.06, metal, x, worktop + 0.03, -d * 0.1, 12);
+      const screen = box(g, [0.27, 0.15, 0.014], dark, [x, worktop + 0.115, -d * 0.1], 0.005);
+      screen.rotation.x = 0.28;
+      const display = box(g, [0.24, 0.125, 0.004], material("#c9d6d3", 0.3), [x, worktop + 0.115, -d * 0.1 - 0.009]);
+      display.rotation.x = 0.28;
+    }
+    box(g, [0.075, 0.02, 0.13], dark, [w * 0.02, h - 0.01, d * 0.4], 0.008);
+    box(g, [0.34, 0.09, 0.24], material("#e8dccb", 0.7), [-w * 0.4, worktop + 0.045, -d * 0.12], 0.008);
+    box(g, [0.3, 0.05, 0.2], material("#c7a9a0", 0.7), [-w * 0.4, worktop + 0.115, -d * 0.12], 0.008);
+  } else if (item.kind === "lounge-bench") {
+    const seatY = h * 0.56,
+      base = material(palette.oak, 0.5);
+    box(g, [w * 0.94, 0.09, d * 0.82], dark, [0, 0.045, 0]);
+    box(g, [w, seatY - 0.2, d], base, [0, 0.09 + (seatY - 0.2) / 2, 0], 0.02);
+    box(g, [w * 0.98, 0.14, d * 0.96], body, [0, seatY - 0.04, 0], 0.05);
+    const back = box(g, [w * 0.98, h - seatY + 0.02, 0.16], body, [0, (h + seatY - 0.02) / 2, -d / 2 + 0.085], 0.06);
+    back.rotation.x = -0.05;
+    for (const x of [-w * 0.25, 0, w * 0.25])
+      box(g, [0.012, 0.006, d * 0.72], tinted(item.color, -0.08), [x, seatY + 0.03, d * 0.09]);
+    for (const side of [-1, 1]) {
+      const bolster = cylinder(g, 0.1, 0.1, d * 0.74, material("#ead9c8"), side * (w / 2 - 0.13), seatY + 0.13, d * 0.05, 20);
+      bolster.rotation.x = Math.PI / 2;
+    }
   }
   g.name = item.kind;
   g.userData.itemId = item.id;
@@ -597,10 +883,14 @@ export function createRoomScene(
   renderer.domElement.style.cssText =
     "display:block;width:100%;height:100%;touch-action:none;outline:none";
   renderer.domElement.tabIndex = 0;
-  renderer.domElement.setAttribute(
-    "aria-label",
-    "Interactive 3D room. Select furniture, drag to rearrange, or change view.",
-  );
+  const labelCanvas = () =>
+    renderer.domElement.setAttribute(
+      "aria-label",
+      isStore(state)
+        ? "Interactive 3D store. Select fixtures, drag to rearrange, or change view."
+        : "Interactive 3D room. Select furniture, drag to rearrange, or change view.",
+    );
+  labelCanvas();
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog("#344139", 18, 38);
@@ -617,6 +907,12 @@ export function createRoomScene(
   controls.target.set(0, 0.8, 0);
   controls.addEventListener("change", () => {
     dirty = true;
+  });
+  /** True until the person moves the camera, so a resize can refit the store instead of leaving it clipped. */
+  let storeFramed = false,
+    storeCameraDistance = 0;
+  controls.addEventListener("start", () => {
+    storeFramed = false;
   });
   scene.add(new THREE.HemisphereLight("#e5eff4", "#8d7f65", 0.55));
   const sun = new THREE.DirectionalLight("#fff4de", 1.9);
@@ -733,6 +1029,55 @@ export function createRoomScene(
   );
   sideLight.lookAt(0, 0.65, 0.4);
   scene.add(sideLight);
+  /** A store is lit from its ceiling; a room keeps its daylight setup, which these values restore exactly. */
+  let storeLit = false;
+  function lightForRoom() {
+    const store = isStore(state),
+      wasStore = storeLit,
+      { width: w, depth: d, height: h } = state.room;
+    storeLit = store;
+    if (!store && !wasStore) {
+      windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
+      sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
+      return;
+    }
+    const fog = scene.fog as THREE.Fog,
+      reach = store ? Math.hypot(w, d) / 2 + 1.5 : 5;
+    fog.near = store ? Math.max(34, storeCameraDistance + 10) : 18;
+    fog.far = store ? fog.near + 46 : 38;
+    Object.assign(sun.shadow.camera, {
+      left: -reach,
+      right: reach,
+      top: reach,
+      bottom: -reach,
+      far: store ? (h * 2.8 + reach) * 2 : 22,
+    });
+    sun.shadow.camera.updateProjectionMatrix();
+    if (store) {
+      sun.position.set(w * 0.42, h * 2.8, d * 0.42);
+      sun.intensity = 0.95;
+      windowLight.position.set(0, h - 0.06, -d * 0.24);
+      sideLight.position.set(0, h - 0.06, d * 0.24);
+      for (const panel of [windowLight, sideLight]) {
+        panel.lookAt(panel.position.x, 0, panel.position.z + 0.001);
+        panel.width = w * 0.62;
+        panel.height = d * 0.32;
+        panel.intensity = 0.9;
+      }
+    } else {
+      sun.position.set(3.5, 4.5, 6);
+      sun.intensity = 1.9;
+      windowLight.width = windowLight.height = 1.5;
+      windowLight.intensity = 4;
+      sideLight.width = 1.42;
+      sideLight.height = 1.5;
+      sideLight.intensity = 3.1;
+      windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
+      windowLight.lookAt(0, 0.7, 0);
+      sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
+      sideLight.lookAt(0, 0.65, 0.4);
+    }
+  }
   function registerSource(root: THREE.Object3D) {
     sourceRoots.push(root);
     root.traverse((o) => {
@@ -982,6 +1327,39 @@ export function createRoomScene(
     if (renderTimings.length > 60) renderTimings.shift();
   }
 
+  /** Pale stone with a gridded joint and an accent mat leading in from the door. */
+  function storeFloor(w: number, d: number, doorX: number, doorW: number) {
+    const stone = material("#e4dcd0", 0.42),
+      joint = material("#c9bfb1", 0.6);
+    box(roomRoot, [w, 0.022, d], stone, [0, 0.01, 0]);
+    for (let x = -w / 2 + 1.5; x < w / 2; x += 1.5)
+      box(roomRoot, [0.006, 0.002, d], joint, [x, 0.0215, 0]).castShadow = false;
+    for (let z = -d / 2 + 1.5; z < d / 2; z += 1.5)
+      box(roomRoot, [w, 0.002, 0.006], joint, [0, 0.0215, z]).castShadow = false;
+    box(roomRoot, [doorW, 0.003, 1.8], material(state.layout.accentColor, 0.55), [
+      doorX,
+      0.0225,
+      d / 2 - 0.9,
+    ]).castShadow = false;
+  }
+  /** Children of the ceiling mesh, so they vanish with it when the camera looks in from above. */
+  function storeCeiling(ceiling: THREE.Object3D, w: number, d: number) {
+    const panel = glow();
+    for (const x of [-w * 0.3, 0, w * 0.3])
+      for (const z of [-d * 0.26, d * 0.26])
+        lit(box(ceiling, [0.14, 0.03, d * 0.34], panel, [x, -0.035, z]));
+  }
+  /** Box faces map one texture across their whole length, which stretches on store-sized walls. */
+  function tileWall(wall: THREE.Mesh) {
+    const { width, height, depth } = (wall.geometry as THREE.BoxGeometry)
+        .parameters,
+      uv = wall.geometry.attributes.uv,
+      across = Math.max(width, depth) / 2.4,
+      up = height / 2.4;
+    for (let i = 0; i < uv.count; i++)
+      uv.setXY(i, uv.getX(i) * across, uv.getY(i) * up);
+    uv.needsUpdate = true;
+  }
   function buildRoom() {
     const { width: w, depth: d, height: h, door } = state.room;
     const signature = JSON.stringify([
@@ -990,6 +1368,7 @@ export function createRoomScene(
       state.layout.accentColor,
       state.wallsVisible,
       state.mode === "walk",
+      isStore(state),
     ]);
     if (signature === roomSignature) return;
     roomSignature = signature;
@@ -1001,10 +1380,11 @@ export function createRoomScene(
       trim = material("#d4cbbb");
     surfaces.apply(plaster, "plaster");
     surfaces.apply(accent, "plaster");
-    windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
-    sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
+    const store = isStore(state);
+    lightForRoom();
     box(roomRoot, [w + 0.18, 0.15, d + 0.18], base, [0, -0.075, 0], 0.025);
-    const plankCount = Math.ceil(w / 0.2),
+    if (store) storeFloor(w, d, door.offset, door.width);
+    const plankCount = store ? 0 : Math.ceil(w / 0.2),
       plankW = w / plankCount;
     for (let i = 0; i < plankCount; i++) {
       const color = new THREE.Color(
@@ -1033,7 +1413,13 @@ export function createRoomScene(
     // Subtle perimeter trim outlines the room even with the cutaway walls hidden.
     box(roomRoot, [w, 0.065, 0.025], trim, [0, 0.052, -d / 2]);
     box(roomRoot, [0.025, 0.065, d], trim, [-w / 2, 0.052, 0]);
-    if (state.wallsVisible || state.mode === "walk") {
+    if (store && (state.wallsVisible || state.mode === "walk")) {
+      box(roomRoot, [w, h, 0.1], accent, [0, h / 2, -d / 2]);
+      box(roomRoot, [0.1, h, d], plaster, [-w / 2, h / 2, 0]);
+      lit(box(roomRoot, [w * 0.86, 0.03, 0.03], glow(), [0, h - 0.34, -d / 2 + 0.07]));
+      lit(box(roomRoot, [0.03, 0.03, d * 0.9], glow(), [-w / 2 + 0.07, h - 0.34, 0]));
+    }
+    if (!store && (state.wallsVisible || state.mode === "walk")) {
       const ww = Math.min(1.55, w * 0.4),
         wh = Math.min(1.55, h * 0.55),
         sill = 0.84,
@@ -1085,27 +1471,27 @@ export function createRoomScene(
         h - 0.08,
         -d / 2 + 0.025,
       ]);
-      if (state.mode === "walk") {
-        box(roomRoot, [0.1, h, d], plaster, [w / 2, h / 2, 0]);
-        const left = door.offset - door.width / 2,
-          right = door.offset + door.width / 2;
-        box(roomRoot, [Math.max(0.01, left + w / 2), h, 0.1], plaster, [
-          (-w / 2 + left) / 2,
-          h / 2,
-          d / 2,
-        ]);
-        box(roomRoot, [Math.max(0.01, w / 2 - right), h, 0.1], plaster, [
-          (right + w / 2) / 2,
-          h / 2,
-          d / 2,
-        ]);
-        box(roomRoot, [door.width, h - door.height, 0.1], plaster, [
-          door.offset,
-          (h + door.height) / 2,
-          d / 2,
-        ]);
-        box(roomRoot, [w, 0.07, d], material("#e5dfd3"), [0, h + 0.015, 0]);
-      }
+    }
+    if (state.mode === "walk") {
+      box(roomRoot, [0.1, h, d], plaster, [w / 2, h / 2, 0]);
+      const left = door.offset - door.width / 2,
+        right = door.offset + door.width / 2;
+      box(roomRoot, [Math.max(0.01, left + w / 2), h, 0.1], plaster, [
+        (-w / 2 + left) / 2,
+        h / 2,
+        d / 2,
+      ]);
+      box(roomRoot, [Math.max(0.01, w / 2 - right), h, 0.1], plaster, [
+        (right + w / 2) / 2,
+        h / 2,
+        d / 2,
+      ]);
+      box(roomRoot, [door.width, h - door.height, 0.1], plaster, [
+        door.offset,
+        (h + door.height) / 2,
+        d / 2,
+      ]);
+      box(roomRoot, [w, 0.07, d], material("#e5dfd3"), [0, h + 0.015, 0]).castShadow = !store;
     }
     if (
       (state.wallsVisible || state.mode === "walk") &&
@@ -1117,7 +1503,8 @@ export function createRoomScene(
         0,
       ]);
       ceiling.name = "room-ceiling";
-      ceiling.castShadow = true;
+      ceiling.castShadow = !store;
+      if (store) storeCeiling(ceiling, w, d);
     }
     // Door frame is visible in plan and cutaway view; the opening stays usable.
     const doorMat = material("#786047");
@@ -1131,7 +1518,15 @@ export function createRoomScene(
       -0.004,
       d / 2 + 0.35,
     ]);
-    if (state.mode !== "plan") {
+    if (store)
+      roomRoot.traverse((o) => {
+        if (
+          o instanceof THREE.Mesh &&
+          (o.material === plaster || o.material === accent)
+        )
+          tileWall(o);
+      });
+    if (state.mode !== "plan" && !store) {
       const fan = new THREE.Group();
       fan.position.set(0, h - 0.25, -0.05);
       cylinder(fan, 0.09, 0.075, 0.12, material("#463f32"), 0, 0, 0);
@@ -1242,6 +1637,103 @@ export function createRoomScene(
     pitch = -0.04,
     lastMode = state.mode,
     lastAspect = 0;
+  /**
+   * The default store view: a fixed three-quarter direction, with distance and pan solved so the
+   * floor, the entrance and the back walls all land in the part of the canvas no overlay covers.
+   */
+  function frameStore() {
+    const { width: w, depth: d, height: h, door } = state.room,
+      hostWidth = Math.max(1, host.clientWidth),
+      hostHeight = Math.max(1, host.clientHeight),
+      inset = storeInsets(hostWidth),
+      tanV = Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2)),
+      tanH = (tanV * hostWidth) / hostHeight;
+    // Normalised screen area left for the store, from -1 to 1 on each axis.
+    const safeWidth = 2 - (4 * inset.side) / hostWidth,
+      safeBottom = -1 + (2 * Math.min(inset.bottom, hostHeight * 0.35)) / hostHeight,
+      safeTop = 1 - (2 * Math.min(inset.top, hostHeight * 0.2)) / hostHeight;
+    const toCamera = new THREE.Vector3(w * 0.56, Math.max(w, d) * 0.8, d).normalize(),
+      forward = toCamera.clone().negate(),
+      right = new THREE.Vector3().crossVectors(forward, UP).normalize(),
+      up = new THREE.Vector3().crossVectors(right, forward);
+    const outline = [
+      ...[-1, 1].flatMap((x) =>
+        [-1, 1].map((z) => new THREE.Vector3((x * w) / 2, 0, (z * d) / 2)),
+      ),
+      new THREE.Vector3(-w / 2, h, -d / 2),
+      new THREE.Vector3(w / 2, h, -d / 2),
+      new THREE.Vector3(-w / 2, h, d / 2),
+      new THREE.Vector3(door.offset - door.width / 2, 0, d / 2 + 0.7),
+      new THREE.Vector3(door.offset + door.width / 2, 0, d / 2 + 0.7),
+      // Fixtures left outside after a resize still need to show, so they can be dragged back in.
+      ...state.layout.items
+        .filter((item) => item.visible)
+        .flatMap((item) =>
+          getFootprint(item).flatMap((corner) => [
+            new THREE.Vector3(corner.x, 0, corner.z),
+            new THREE.Vector3(corner.x, item.dimensions.height, corner.z),
+          ]),
+        ),
+    ];
+    const aim = new THREE.Vector3();
+    /** Pans to centre the store in the safe area at this distance and reports whether it fits. */
+    const fits = (distance: number) => {
+      aim.set(0, h / 3, 0);
+      let spanX = 0,
+        spanY = 0;
+      for (let pass = 0; pass < 4; pass++) {
+        const eye = aim.clone().addScaledVector(toCamera, distance),
+          xs: number[] = [],
+          ys: number[] = [];
+        for (const corner of outline) {
+          const offset = corner.clone().sub(eye),
+            depth = offset.dot(forward);
+          if (depth < 0.5) return false;
+          xs.push(offset.dot(right) / (depth * tanH));
+          ys.push(offset.dot(up) / (depth * tanV));
+        }
+        const minX = Math.min(...xs),
+          maxX = Math.max(...xs),
+          minY = Math.min(...ys),
+          maxY = Math.max(...ys);
+        spanX = maxX - minX;
+        spanY = maxY - minY;
+        aim
+          .addScaledVector(right, ((minX + maxX) / 2) * distance * tanH)
+          .addScaledVector(up, ((minY + maxY - safeBottom - safeTop) / 2) * distance * tanV);
+      }
+      return spanX <= safeWidth && spanY <= safeTop - safeBottom;
+    };
+    let near = 1,
+      far = Math.max(w, d, h) * 12;
+    for (let step = 0; step < 24; step++) {
+      const middle = (near + far) / 2;
+      if (fits(middle)) far = middle;
+      else near = middle;
+    }
+    fits(far);
+    // Below the ceiling the ceiling would hide the store, so the view stays above it.
+    const distance = Math.max(far, (h + 0.6 - aim.y) / toCamera.y);
+    fits(distance);
+    perspective.up.set(0, 1, 0);
+    perspective.position.copy(aim).addScaledVector(toCamera, distance);
+    // Orbit around the floor spot under the screen centre, so the pan does not skew the orbit.
+    controls.target
+      .copy(perspective.position)
+      .addScaledVector(forward, (0.7 - perspective.position.y) / forward.y);
+    const reach = perspective.position.distanceTo(controls.target),
+      scale = Math.max(w, d);
+    controls.maxDistance = Math.max(scale * 3.2, reach * 1.3);
+    perspective.far = Math.max(100, scale * 10, reach * 3);
+    perspective.updateProjectionMatrix();
+    controls.update();
+    storeFramed = true;
+    if (storeCameraDistance !== reach) {
+      storeCameraDistance = reach;
+      lightForRoom();
+    }
+    dirty = true;
+  }
   function resetView() {
     const scale = Math.max(state.room.width, state.room.depth);
     if (state.mode === "walk") {
@@ -1261,6 +1753,10 @@ export function createRoomScene(
       plan.zoom = 1;
       plan.updateProjectionMatrix();
     } else {
+      if (isStore(state)) {
+        frameStore();
+        return;
+      }
       const aspect = Math.max(
           0.5,
           host.clientWidth / Math.max(1, host.clientHeight),
@@ -1305,6 +1801,7 @@ export function createRoomScene(
     lastAspect = aspect;
     perspective.aspect = aspect;
     perspective.updateProjectionMatrix();
+    if (storeFramed && state.mode === "orbit" && isStore(state)) frameStore();
     const extent = Math.max(
       state.room.depth * 0.67,
       (state.room.width * 0.67) / aspect,
@@ -1676,13 +2173,23 @@ export function createRoomScene(
   (window as unknown as Record<string, unknown>).__roomshiftScene = observables;
   function update(next: SceneState) {
     if (lastMode !== next.mode) onPointerCancel();
+    const previous = state,
+      sameSpace = isStore(previous) === isStore(next),
+      // A store's framing comes from its size, so a new size needs a new view. A bedroom keeps its camera.
+      refit =
+        isStore(next) &&
+        JSON.stringify(previous.room) !== JSON.stringify(next.room);
     state = next;
+    labelCanvas();
     camera = state.mode === "plan" ? plan : perspective;
     controls.enabled = state.mode === "orbit";
     if (lastMode !== state.mode) {
       keys.clear();
       pointer = null;
       lastMode = state.mode;
+      resetView();
+    } else if (!sameSpace || refit) {
+      storeFramed = false;
       resetView();
     }
     walkPad.style.display = state.mode === "walk" ? "grid" : "none";
@@ -1749,6 +2256,7 @@ export function createRoomScene(
       plan.lookAt(item.position.x, 0, item.position.z);
       setPlanZoom(1.6);
     } else {
+      storeFramed = false;
       const distance =
         Math.max(item.dimensions.width, item.dimensions.depth) * 1.4 + 0.8;
       controls.target.set(

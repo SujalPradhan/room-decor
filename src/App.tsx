@@ -14,18 +14,23 @@ import {
   ChevronRight,
   CircleHelp,
   Copy,
+  CreditCard,
   DoorOpen,
   Download,
   Eye,
   EyeOff,
   Fan,
+  FlaskConical,
   Footprints,
+  Gem,
   Grid2X2,
   Layers3,
+  LayoutGrid,
   Leaf,
   Lock,
   Maximize2,
   Menu,
+  MessagesSquare,
   MousePointer2,
   Move,
   Palette,
@@ -34,9 +39,12 @@ import {
   Redo2,
   RotateCcw,
   RotateCw,
+  Rows3,
   Ruler,
   Save,
   Settings2,
+  Sofa,
+  Store,
   Table2,
   Trash2,
   Undo2,
@@ -53,12 +61,16 @@ import type {
   Project,
   SceneController,
   SceneState,
+  SpaceType,
   ViewMode,
 } from "./types";
 import {
   createFurnitureItem,
   createInitialProject,
+  createRetailProject,
+  kindsForSpace,
   parseProject,
+  spaceOf,
   upgradeRetiredPresets,
   serializeProject,
   validateLayout,
@@ -90,6 +102,14 @@ import {
 } from "./measurements";
 
 const STORAGE_KEY = "roomshift-project-v1";
+const STORE_STORAGE_KEY = "roomshift-store-project-v1";
+const SPACE_KEY = "roomshift-space-v1";
+const storageKey = (space: SpaceType) => (space === "retail" ? STORE_STORAGE_KEY : STORAGE_KEY);
+const defaultName = (space: SpaceType) => (space === "retail" ? "Experiential store" : "My bedroom");
+const spaces = [
+  { id: "room", label: "Bedroom", Icon: BedDouble },
+  { id: "retail", label: "Store", Icon: Store },
+] as const;
 const kindIcons: Record<ItemKind, LucideIcon> = {
   bed: BedDouble,
   wardrobe: PanelTop,
@@ -100,6 +120,13 @@ const kindIcons: Record<ItemKind, LucideIcon> = {
   stool: Box,
   plant: Leaf,
   shelf: Layers3,
+  "display-table": LayoutGrid,
+  "wall-display": Rows3,
+  "testing-bar": FlaskConical,
+  "consultation-station": MessagesSquare,
+  "hero-plinth": Gem,
+  "checkout-counter": CreditCard,
+  "lounge-bench": Sofa,
 };
 const kindNames: Record<ItemKind, string> = {
   bed: "Wooden bed",
@@ -111,6 +138,13 @@ const kindNames: Record<ItemKind, string> = {
   stool: "Small stool",
   plant: "Potted plant",
   shelf: "Bookshelf",
+  "display-table": "Display table",
+  "wall-display": "Wall display",
+  "testing-bar": "Testing bar",
+  "consultation-station": "Consultation station",
+  "hero-plinth": "Hero plinth",
+  "checkout-counter": "Checkout counter",
+  "lounge-bench": "Lounge bench",
 };
 const colors = [
   "#d3c7b0",
@@ -131,16 +165,54 @@ const furnitureColors = [
   "#667d88",
 ];
 type Modal = "catalog" | "room" | "references" | "help" | "save" | null;
+/** Decisions about saved work. Kept apart from Modal because switching and walkthroughs close that one. */
+type SpacePrompt = { kind: "conflict" | "unsaved" | "draft"; retry?: () => void };
+const ROOM_KIND_IN_STORE = "Room furniture cannot go in a store. Try a plant, stool, chair or shelf instead.";
 function clone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x));
 }
-function initialProject(): Project {
-  const identify = (p: Project): Project => ({ ...p, id: p.id ?? crypto.randomUUID(), name: p.name ?? "My bedroom" });
+function initialSpace(): SpaceType {
+  const linked = new URLSearchParams(location.search).get("space");
+  if (linked === "retail" || linked === "room") return linked;
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return identify(upgradeRetiredPresets(parseProject(saved)));
-  } catch {}
-  return identify(createInitialProject());
+    return localStorage.getItem(SPACE_KEY) === "retail" ? "retail" : "room";
+  } catch {
+    return "room";
+  }
+}
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+/** What this tab knows about the space's key. `clean` is the snapshot with nothing left to save. */
+interface Stored {
+  raw: string | null;
+  clean: string;
+  /** Unreadable data could not be backed up, so it must not be overwritten. */
+  held: boolean;
+}
+type Loaded = Stored & { project: Project; notice?: string };
+function loadProject(space: SpaceType): Loaded {
+  const identify = (p: Project): Project => ({ ...p, id: p.id ?? crypto.randomUUID(), name: p.name ?? defaultName(space) });
+  const key = storageKey(space), raw = readStored(key), word = space === "retail" ? "store" : "bedroom";
+  const loaded = (project: Project, extra: Partial<Loaded> = {}): Loaded => ({ project, raw, clean: serializeProject(project), held: false, ...extra });
+  if (raw) {
+    try {
+      const parsed = upgradeRetiredPresets(parseProject(raw));
+      if (spaceOf(parsed) === space) return loaded(identify(parsed));
+    } catch {}
+  }
+  const fresh = identify(space === "retail" ? { ...createRetailProject(), id: crypto.randomUUID() } : createInitialProject());
+  if (!raw) return loaded(fresh);
+  try {
+    localStorage.setItem(`${key}.corrupt`, raw);
+    return loaded(fresh, { notice: `Your saved ${word} could not be read, so a new one was started. The old data was kept in this browser as ${key}.corrupt.` });
+  } catch {
+    return loaded(fresh, { held: true, notice: `Your saved ${word} could not be read or backed up, so it was left in place and changes here will not be saved. Export your project to keep a copy.` });
+  }
 }
 function downloadFile(name: string, text: string, type = "application/json") {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -198,14 +270,22 @@ function RoomCanvas({
       );
     }
   }, []);
-  useEffect(() => controller.current?.update(state), [state]);
+  useEffect(() => {
+    // Without this boundary, one bad frame would blank the whole app rather than only the 3D view.
+    try {
+      controller.current?.update(state);
+      if (controller.current) callbackRef.current.onError("");
+    } catch (e) {
+      callbackRef.current.onError(e instanceof Error ? e.message : "The 3D view could not update.");
+    }
+  }, [state]);
   return <div ref={host} className="canvas-host" data-testid="room-canvas" />;
 }
 
 function MiniPlan({ layout, project }: { layout: Layout; project: Project }) {
   return (
     <div className="mini-plan">
-      <div className="mini-plan-inner">
+      <div className={`mini-plan-inner${spaceOf(project) === "retail" ? " store-floor" : ""}`}>
         {layout.items
           .filter((i) => i.visible)
           .map((i) => (
@@ -242,7 +322,8 @@ export default function App() {
       useState<FurnitureItem | null>(null),
     [showReplacement, setShowReplacement] = useState(true),
     [missingModel, setMissingModel] = useState(false);
-  const [project, setProject] = useState<Project>(initialProject),
+  const [opened] = useState(() => loadProject(initialSpace()));
+  const [project, setProject] = useState<Project>(opened.project),
     [selectedId, setSelectedId] = useState<string | null>(null),
     [mode, setMode] = useState<ViewMode>("orbit");
   const [wallsVisible, setWallsVisible] = useState(true),
@@ -256,6 +337,8 @@ export default function App() {
     [sceneError, setSceneError] = useState(""),
     [toast, setToast] = useState(""),
     [savedSnapshot, setSavedSnapshot] = useState(""),
+    [saveFailed, setSaveFailed] = useState(false),
+    [prompt, setPrompt] = useState<SpacePrompt | null>(null),
     [exportOpen, setExportOpen] = useState(false);
   const [past, setPast] = useState<Project[]>([]),
     [future, setFuture] = useState<Project[]>([]),
@@ -265,13 +348,29 @@ export default function App() {
       { name: string; url: string; type: string }[]
     >([]);
   const controller = useRef<SceneController | null>(null),
+    shownSpace = useRef(spaceOf(project)),
     fileInput = useRef<HTMLInputElement>(null),
     mediaInput = useRef<HTMLInputElement>(null),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
     projectRef = useRef(project),
-    referencesRef = useRef(references);
+    referencesRef = useRef(references),
+    synced = useRef<Stored>({ raw: opened.raw, clean: opened.clean, held: opened.held }),
+    pastRef = useRef(past),
+    futureRef = useRef(future),
+    promptRef = useRef(prompt),
+    reconcileRef = useRef(() => {}),
+    shelved = useRef(new Map<SpaceType, { project: Project; past: Project[]; future: Project[]; raw: string | null; clean: string }>());
   projectRef.current = project;
   referencesRef.current = references;
+  pastRef.current = past;
+  futureRef.current = future;
+  promptRef.current = prompt;
+  const space = spaceOf(project),
+    place = space === "retail" ? "store" : "room",
+    Place = space === "retail" ? "Store" : "Room",
+    pieces = space === "retail" ? "fixtures" : "furniture",
+    Pieces = space === "retail" ? "Fixtures" : "Furniture",
+    projectName = project.name ?? defaultName(space);
   const layout =
       project.layouts.find((l) => l.id === project.activeLayoutId) ??
       project.layouts[0],
@@ -283,18 +382,36 @@ export default function App() {
   const activeCount = layout.items.filter((i) => i.visible).length;
   const snapshot = useMemo(() => serializeProject(project), [project]),
     saved = savedSnapshot === snapshot;
-  const notify = useCallback((s: string) => {
+  const notify = useCallback((s: string, ms = 4000) => {
     setToast(s);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 4000);
+    toastTimer.current = setTimeout(() => setToast(""), ms);
   }, []);
-  const studio = useProductStudio(project.id!, project.name ?? "My bedroom", notify);
+  useEffect(() => {
+    if (opened.notice) notify(opened.notice, 10000);
+  }, [opened, notify]);
+  /** Never overwrites a value this tab has not seen. With onlyChanges, an unchanged project is not written at all. */
+  const persist = useCallback((current: Project, onlyChanges = false): "saved" | "conflict" | "failed" => {
+    const text = serializeProject(current), known = synced.current;
+    if (onlyChanges && text === known.clean) return "saved";
+    if (known.held) return "failed";
+    try {
+      const key = storageKey(spaceOf(current)), raw = localStorage.getItem(key);
+      if (raw !== null && raw !== known.raw && raw !== text) return "conflict";
+      if (raw !== text) localStorage.setItem(key, text);
+      synced.current = { ...known, raw: text, clean: text };
+      return "saved";
+    } catch {
+      return "failed";
+    }
+  }, []);
+  const studio = useProductStudio(project.id!, projectName, notify);
   useEffect(() => {
     if (!ready || !studio.loaded || meteredScene.current || sceneFinished.current === null) return;
     meteredScene.current = true;
     const duration = sceneFinished.current - sceneStarted.current;
-    void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name ?? "My bedroom", kind: "render", name: "Open room scene", engine: "Three.js browser renderer", startedAt: new Date(Date.now() - duration).toISOString(), elapsedMs: duration }));
-  }, [ready, studio.loaded, studio.record, project.id, project.name]);
+    void studio.record(createLocalOperation({ roomId: project.id!, roomName: projectName, kind: "render", name: `Open ${place} scene`, engine: "Three.js browser renderer", startedAt: new Date(Date.now() - duration).toISOString(), elapsedMs: duration }));
+  }, [ready, studio.loaded, studio.record, project.id, projectName]);
   const selectedProduct=studio.products.find(p=>p.id===selected?.productId);
   const selectedPhoto=selectedProduct?.images.find(i=>i.id===selectedProduct.selectedImageId)??selectedProduct?.images[0];
   const selectedProductPhoto=selectedPhoto&&isSafeProductImageUrl(selectedPhoto.url)?selectedPhoto.url:undefined;
@@ -308,6 +425,7 @@ export default function App() {
       const original = productTarget ? layout.items.find(i => i.id === productTarget.id)! : null;
       product = await studio.prepareModel(product);
       const candidate = productToFurniture(product, original);
+      if (!kindsForSpace(space).includes(candidate.kind)) throw new Error(ROOM_KIND_IN_STORE);
       if (!original) candidate.position = { x: 0, z: Math.min(project.room.depth / 2 - candidate.dimensions.depth / 2, 1) };
       studio.save(product); setProductPreview({ product: clone(product), candidate, originalId: original?.id ?? null, layoutId: layout.id }); setShowReplacement(true); setReplacementDraft(null); setProductOpen(false); setTab("object"); setMobilePanel("properties");
     } catch (error) { notify(error instanceof Error ? error.message : "This product could not be previewed."); }
@@ -362,15 +480,71 @@ export default function App() {
     if(presenting&&walkthrough.view?.plan.toId===targetId)return;
     const snapshot=walkthrough.snapshot(),from=snapshot&&presenting?{...snapshot,id:'current-view',name:'Current view'}:current.layouts.find(l=>l.id===current.activeLayoutId)!;
     setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
-    walkthrough.start(from,target,current.room,request,undefined,byAgent);
+    walkthrough.start(from,target,current.room,request,undefined,byAgent,spaceOf(current));
   };
   const useRules=(request:string,note='Keyword rules')=>{
-    const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room);
+    const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room,spaceOf(current));
     setLayoutReply({text:match.reply,meta:note});
     if(match.targetId)startPreset(match.targetId,request);
   };
   const stopAgent=()=>{agentAbort.current?.abort();agentAbort.current=null;setAgentBusy(false);};
   const cancelWalkthrough=()=>{if(!walkthrough.current.current?.completed)setLayoutReply(null);walkthrough.close();};
+  const showProject=(loaded:Loaded,past:Project[]=[],future:Project[]=[],shown=loaded.project)=>{
+    // Replacing the project makes any late agent reply or walkthrough callback stale.
+    movedOn.current=true;stopAgent();cancelWalkthrough();agentLayout.current=null;
+    synced.current={raw:loaded.raw,clean:loaded.clean,held:loaded.held};
+    projectRef.current=shown;pastRef.current=past;futureRef.current=future;setProject(shown);
+    setPast(past);setFuture(future);setSelectedId(null);setLayoutRequest('');setLayoutReply(null);
+    setReplacementDraft(null);setProductPreview(null);setProductTarget(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setMobilePanel(null);setMode(m=>m==='walk'?'orbit':m);
+  };
+  /** History, and any work storage refused, wait in memory. They are dropped if the key has moved on since. */
+  const openSpace=(next:SpaceType)=>{
+    const current=projectRef.current;
+    shelved.current.set(spaceOf(current),{project:current,past:pastRef.current,future:futureRef.current,raw:synced.current.raw,clean:synced.current.clean});
+    const loaded=loadProject(next),memory=shelved.current.get(next);
+    shelved.current.delete(next);
+    if(memory&&memory.raw===loaded.raw){showProject({...loaded,clean:memory.clean},memory.past,memory.future,memory.project);return;}
+    showProject(loaded);
+    const note=loaded.notice??(memory?'This space changed in another tab, so the latest version is showing and its undo history was cleared.':'');
+    if(note)notify(note,10000);
+  };
+  const switchSpace=(next:SpaceType,after?:()=>void,ack:{draft?:boolean;unsaved?:boolean}={})=>{
+    const current=projectRef.current;
+    if(next===spaceOf(current)){after?.();return;}
+    const retry=(more:typeof ack)=>()=>switchSpace(next,after,{...ack,...more});
+    if(!ack.draft&&(replacementDraft||productPreview)){setPrompt({kind:'draft',retry:retry({draft:true})});return;}
+    if(!ack.unsaved){
+      const result=persist(current,true);
+      if(result==='conflict'){setPrompt({kind:'conflict',retry:retry({draft:true})});return;}
+      if(result==='failed'){setPrompt({kind:'unsaved',retry:retry({draft:true,unsaved:true})});return;}
+    }
+    openSpace(next);after?.();
+  };
+  const adoptStored=()=>{
+    const current=projectRef.current,loaded=loadProject(spaceOf(current));
+    showProject(loaded);
+    notify(loaded.notice??`This ${place} changed in another tab, so the latest version is showing.`,8000);
+  };
+  // A tab with nothing unsaved just follows the newer data. Otherwise the person chooses, and saving waits.
+  reconcileRef.current=()=>{
+    const current=projectRef.current,raw=readStored(storageKey(spaceOf(current)));
+    if(raw===null){synced.current={...synced.current,raw:null};return;}
+    if(raw===synced.current.raw)return;
+    const text=serializeProject(current);
+    if(raw===text)synced.current={...synced.current,raw,clean:text};
+    else if(text===synced.current.clean)adoptStored();
+    else setPrompt(old=>old?.kind==='conflict'?old:{kind:'conflict'});
+  };
+  const resolveConflict=(keepMine:boolean)=>{
+    const retry=prompt?.retry,current=projectRef.current;
+    setPrompt(null);
+    if(keepMine){
+      synced.current={...synced.current,raw:readStored(storageKey(spaceOf(current)))};
+      if(persist(current)==='saved'){setSaveFailed(false);setSavedSnapshot(serializeProject(current));}
+      else notify('Storage is unavailable. Export your project to keep a copy.');
+    }else adoptStored();
+    retry?.();
+  };
   const askLayout=async(text:string)=>{
     const request=text.trim(),asked=projectRef.current;
     if(!request||agentBusy||presenting)return;
@@ -399,7 +573,7 @@ export default function App() {
     if(result.action==='rearrange'){
       agentLayout.current=result.layout;
       setSelectedId(null);setMobilePanel(null);setExportOpen(false);
-      walkthrough.start(from,result.layout,current.room,request,result.reasons,true);
+      walkthrough.start(from,result.layout,current.room,request,result.reasons,true,spaceOf(current));
     }
   };
   const deleteLayout=(id:string)=>{
@@ -432,7 +606,12 @@ export default function App() {
     [commit, notify],
   );
   const placementKey=studio.session?.user ? `roomshift-auto-products:${studio.session.user.id}:${project.id}` : '';
-  const saveIntents=()=>{if(placementKey)try{localStorage.setItem(placementKey,JSON.stringify([...autoIntents.current.values()]));}catch{/* Current-tab placement remains available. */}};
+  // The scope ref changes with the map, so a callback from an earlier space cannot file one space's intents under another's key.
+  const saveIntents=()=>{const key=placementScope.current;if(key)try{localStorage.setItem(key,JSON.stringify([...autoIntents.current.values()]));}catch{/* Current-tab placement remains available. */}};
+  const forgetIntent=(id:string,scope:string,roomId:string)=>{
+    if(scope===placementScope.current){autoIntents.current.delete(id);saveIntents();return;}
+    if(scope)try{localStorage.setItem(scope,JSON.stringify(readPlacementIntents(scope,roomId).filter(i=>i.id!==id)));}catch{/* The stale intent expires with its product. */}
+  };
   useEffect(()=>{
     if(!studio.loaded||!placementKey||placementScope.current===placementKey)return;
     placementScope.current=placementKey;autoIntents.current=new Map(readPlacementIntents(placementKey,project.id!).map(i=>[i.id,i]));setPlacementTick(n=>n+1);
@@ -451,15 +630,17 @@ export default function App() {
     setPlacementTick(n=>n+1);
   };
   const generateProduct=async(product:ProductDraft)=>{
+    if(product.kind&&!kindsForSpace(spaceOf(projectRef.current)).includes(product.kind))throw Error(ROOM_KIND_IN_STORE);
     const source=sourceVersion.current,request=new AbortController();activeProductRequest.current=request;
     await pendingCancellation.current;if(source!==sourceVersion.current)return;
     const current=projectRef.current,target=current.layouts.find(l=>l.id===current.activeLayoutId),original=target?.items.find(i=>i.id===productTarget?.id);
     if(product.roomId!==current.id)product={...product,id:crypto.randomUUID(),roomId:current.id!,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     for(const previous of autoIntents.current.values())if(previous.productId===product.id)autoIntents.current.delete(previous.id);
-    if(!target)throw Error('The target room is unavailable.');
+    if(!target)throw Error(`The target ${place} is unavailable.`);
     const intent:ProductPlacementIntent={id:crypto.randomUUID(),productId:product.id,revision:product.revision,roomId:current.id!,layoutId:target.id,targetId:original?.id??null,...(original?{targetFingerprint:JSON.stringify(original)}:{}),createdAt:Date.now()};
     autoIntents.current.set(intent.id,intent);activeAutoIntent.current=intent.id;saveIntents();setPlacementTick(n=>n+1);
-    try{await studio.generate(product,request.signal);}catch(error){autoIntents.current.delete(intent.id);saveIntents();throw error;}
+    const scope=placementScope.current;
+    try{await studio.generate(product,request.signal);}catch(error){forgetIntent(intent.id,scope,intent.roomId);throw error;}
   };
   useEffect(()=>{
     if(!studio.loaded||!placementKey||placementScope.current!==placementKey)return;
@@ -481,11 +662,12 @@ export default function App() {
           let candidate=generatedProductToFurniture(prepared,replace);
           if(!candidate.assetId||!await getLocalModel(candidate.assetId))throw Error('The generated model is temporarily unavailable.');
           if(!appAlive.current||!autoIntents.current.has(intent.id)||placementScope.current!==placementKey)return;
+          if(!kindsForSpace(spaceOf(current)).includes(candidate.kind)){autoIntents.current.delete(intent.id);saveIntents();notify(ROOM_KIND_IN_STORE);return;}
           if(!replace){candidate.id=`product-${intent.id}`;candidate=chooseProductPosition(candidate,target,current.room);}
           const accepted=commit(p=>{
             let destination=p.layouts.find(l=>l.id===intent.layoutId);if(!destination)throw Error('The destination layout changed.');
             if(destination.id==='original'){
-              if(p.layouts.length>=12)throw Error('The model is saved in My products. Your room has reached its layout limit.');
+              if(p.layouts.length>=12)throw Error(`The model is saved in My products. Your ${place} has reached its layout limit.`);
               destination={...clone(destination),id:`layout-${intent.id}`,name:'My layout',description:'A new piece, automatically added'};p.layouts.push(destination);if(p.activeLayoutId===intent.layoutId)p.activeLayoutId=destination.id;
             }
             if(destination.items.some(i=>i.id===candidate.id&&i.assetId===candidate.assetId))return;
@@ -493,14 +675,14 @@ export default function App() {
           });
           if(!accepted){autoIntents.current.delete(intent.id);saveIntents();return;}
           // Persist the room before consuming the intent, preventing duplicate additions on reload.
-          try{localStorage.setItem(STORAGE_KEY,serializeProject(projectRef.current));}catch{}
+          persist(projectRef.current);
           autoIntents.current.delete(intent.id);saveIntents();placementRetries.current.delete(intent.id);
           setSelectedId(candidate.id);setProductOpen(false);setProductPreview(null);setReplacementDraft(null);setTab('object');setMode('orbit');setMobilePanel(null);
-          requestAnimationFrame(()=>controller.current?.focusItem?.(candidate.id));notify('Product added to your room. Undo removes this change.');
+          requestAnimationFrame(()=>controller.current?.focusItem?.(candidate.id));notify(`Product added to your ${place}. Undo removes this change.`);
         }catch(error){
           const attempts=(placementRetries.current.get(intent.id)??0)+1;placementRetries.current.set(intent.id,attempts);
           if(attempts<3&&appAlive.current){const timer=setTimeout(()=>{placementTimers.current.delete(intent.id);setPlacementTick(n=>n+1);},attempts*2500);placementTimers.current.set(intent.id,timer);}
-          else{autoIntents.current.delete(intent.id);saveIntents();notify(error instanceof Error?error.message:'The product model could not be loaded. Your room was kept.');}
+          else{forgetIntent(intent.id,placementKey,intent.roomId);notify(error instanceof Error?error.message:`The product model could not be loaded. Your ${place} was kept.`);}
         }finally{placing.current.delete(intent.id);}
       })();
     }
@@ -547,17 +729,46 @@ export default function App() {
   }, [future, project,presenting]);
   useEffect(() => {
     const t = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, snapshot);
-        setSavedSnapshot(snapshot);
-      } catch {
-        notify("Storage is unavailable. Export your project to keep a copy.");
-      }
+      if (promptRef.current?.kind === "conflict") return;
+      const result = persist(projectRef.current);
+      setSaveFailed(result === "failed");
+      if (result === "saved") setSavedSnapshot(snapshot);
+      else if (result === "failed") notify("Storage is unavailable. Export your project to keep a copy.");
+      else reconcileRef.current();
     }, 350);
     return () => clearTimeout(t);
-  }, [snapshot, notify]);
+  }, [snapshot, space, notify, persist]);
+  useEffect(() => {
+    const changed = (e: StorageEvent) => {
+      if (e.storageArea !== localStorage) return;
+      if (e.key === null || e.key === storageKey(spaceOf(projectRef.current))) reconcileRef.current();
+    };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, []);
+  useEffect(() => {
+    let remembered = true;
+    try {
+      localStorage.setItem(SPACE_KEY, space);
+    } catch {
+      remembered = false;
+    }
+    const url = new URL(location.href);
+    if (space === "retail") url.searchParams.set("space", "retail");
+    else if (remembered) url.searchParams.delete("space");
+    else url.searchParams.set("space", "room");
+    if (url.href !== location.href) history.replaceState(history.state, "", url);
+    if (shownSpace.current !== space) {
+      shownSpace.current = space;
+      controller.current?.resetView();
+    }
+  }, [space]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      if (promptRef.current) {
+        if (e.key === "Escape" && promptRef.current.kind !== "conflict") setPrompt(null);
+        return;
+      }
       if (
         (e.target as HTMLElement)?.closest(
           "input,textarea,select,[contenteditable='true']",
@@ -567,7 +778,7 @@ export default function App() {
       if(agentBusy&&e.key==='Escape'){e.preventDefault();stopAgent();return;}
       if(presenting){
         if(e.key==='Escape'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z')){e.preventDefault();cancelWalkthrough();}
-        else if(e.code==='Space'){e.preventDefault();walkthrough.toggle();}
+        else if(e.code==='Space'&&!(e.target as HTMLElement)?.closest('.space-switch')){e.preventDefault();walkthrough.toggle();}
         return;
       }
       if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&!modal&&!productOpen&&!costOpen&&!replacementDraft&&!productPreview){e.preventDefault();agentInput.current?.focus();return;}
@@ -617,6 +828,7 @@ export default function App() {
   movedOn.current=Boolean(walkthrough.view||modal||productOpen||costOpen||replacementDraft||productPreview||mode==='walk');
   const sceneState = useMemo<SceneState>(
     () => ({
+      space,
       room: project.room,
       layout: (presenting?layoutFrame.current?.layout:null) ?? (productPreview && productPreview.layoutId === layout.id && showReplacement
         ? { ...layout, items: productPreview.originalId ? layout.items.map(i => i.id === productPreview.originalId ? productPreview.candidate : i) : [...layout.items, productPreview.candidate] }
@@ -629,6 +841,7 @@ export default function App() {
       showClearances:presenting?false:showClearances,
     }),
     [
+      space,
       project.room,
       productPreview,
       layout,
@@ -669,11 +882,17 @@ export default function App() {
   const addItem = (kind: ItemKind) => {
     const item = createFurnitureItem(kind);
     item.position = { x: 0, z: 1.5 };
+    let crowded = false;
+    if (space === "retail") {
+      const { x, z } = chooseProductPosition(item, layout, project.room).position;
+      item.position = { x: Math.round(x * 100) / 100, z: Math.round(z * 100) / 100 };
+      crowded = validateLayout({ ...layout, items: [...layout.items, item] }, project.room).some((i) => i.severity === "error" && i.itemIds.includes(item.id));
+    }
     if (editLayout((l) => l.items.push(item))) {
       setSelectedId(item.id);
       setModal(null);
       setTab("object");
-      notify(`${item.name} added. Drag it into place.`);
+      notify(crowded ? `${item.name} added, but the floor has no free spot left. Drag it into place.` : `${item.name} added. Drag it into place.`);
     }
   };
   const saveLayout = () => {
@@ -689,27 +908,33 @@ export default function App() {
     });
     if (success) {
       setModal(null);
-      notify("Layout saved. Make yourself at home.");
+      notify(space === "retail" ? "Layout saved." : "Layout saved. Make yourself at home.");
     }
   };
   const importProject = async (file?: File) => {
     if (!file) return;
     if (file.size > 2_000_000) {
       notify(
-        "Could not open this room: The project is too large (maximum 2 MB).",
+        `Could not open this ${place}: The project is too large (maximum 2 MB).`,
       );
       if (fileInput.current) fileInput.current.value = "";
       return;
     }
     try {
-      const parsed = parseProject(await file.text());
-      const next = { ...parsed, id: parsed.id ?? crypto.randomUUID(), name: parsed.name ?? (file.name.replace(/\.json$/i, "").slice(0, 80) || "My room") };
-      commit((p) => Object.assign(p, next));
-      setSelectedId(null);
-      setReplacementDraft(null); setProductPreview(null); setProductOpen(false);
-      notify(
-        "Project opened successfully. Imported GLB files are stored separately in this browser.",
-      );
+      const parsed = parseProject(await file.text()), target = spaceOf(parsed);
+      const next = { ...parsed, id: parsed.id ?? crypto.randomUUID(), name: parsed.name ?? (file.name.replace(/\.json$/i, "").slice(0, 80) || (target === "retail" ? "My store" : "My room")) };
+      const moved = target !== spaceOf(projectRef.current);
+      // A file opens in its own space. Committing there keeps that space's previous project one undo away.
+      switchSpace(target, () => {
+        commit((p) => Object.assign(p, next));
+        setSelectedId(null);
+        setReplacementDraft(null); setProductPreview(null); setProductOpen(false);
+        notify(
+          moved
+            ? `Project opened in ${target === "retail" ? "the store" : "the bedroom"}. Undo restores the one it replaced.`
+            : "Project opened successfully. Imported GLB files are stored separately in this browser.",
+        );
+      });
     } catch (e) {
       notify(
         e instanceof Error
@@ -724,7 +949,7 @@ export default function App() {
     try {
       const url = controller.current?.capture();
       if (!url) {
-        notify("Wait for the room to finish loading.");
+        notify(`Wait for the ${place} to finish loading.`);
         return;
       }
       const a = document.createElement("a");
@@ -732,12 +957,16 @@ export default function App() {
       a.download =
         "roomshift-" + layout.name.toLowerCase().replaceAll(" ", "-") + ".png";
       a.click();
-      notify("Room image downloaded.");
-      void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name, kind: "render", name: "Export room image", engine: "Three.js PNG export", startedAt, elapsedMs: performance.now() - started }));
+      notify(`${Place} image downloaded.`);
+      void studio.record(createLocalOperation({ roomId: project.id!, roomName: project.name, kind: "render", name: `Export ${place} image`, engine: "Three.js PNG export", startedAt, elapsedMs: performance.now() - started }));
     } catch {
-      notify("The room image could not be exported.");
+      notify(`The ${place} image could not be exported.`);
     }
     setExportOpen(false);
+  };
+  const exportProject = () => {
+    downloadFile("roomshift-project.json", serializeProject(projectRef.current));
+    notify("Project downloaded.");
   };
   const convert = (m: number) => toDisplayUnits(m, project.unit);
   const changeDimension = (
@@ -782,15 +1011,30 @@ export default function App() {
         </a>
         <div className="breadcrumb">
           My spaces <ChevronRight size={12} />
-          <span>{project.name ?? "My bedroom"}</span>
+          <span>{projectName}</span>
           <span className="project-count">01</span>
+        </div>
+        <div className="space-switch" role="group" aria-label="Space">
+          {spaces.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              className={space === id ? "active" : ""}
+              aria-label={label}
+              aria-pressed={space === id}
+              title={`Switch to ${label.toLowerCase()}`}
+              onClick={() => switchSpace(id)}
+            >
+              <Icon size={13} />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
         <div className="header-actions" inert={presenting}>
           <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>
           <a className="icon-button subtle studio-account" aria-label={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} title={studio.session?.user ? "Sign out of product library" : "Sign in to save products online"} href={studio.session?.user ? "/signout-with-chatgpt?return_to=/" : "/signin-with-chatgpt?return_to=/"} target="_top"><UserRound size={16}/></a>
           <span className="save-status">
             <i />
-            {saved ? "Saved on this device" : "Saving…"}
+            {saveFailed ? "Not saved" : saved ? "Saved on this device" : "Saving…"}
           </span>
           <button
             className="icon-button subtle"
@@ -811,12 +1055,8 @@ export default function App() {
               <div className="dropdown">
                 <button
                   onClick={() => {
-                    downloadFile(
-                      "roomshift-project.json",
-                      serializeProject(project),
-                    );
+                    exportProject();
                     setExportOpen(false);
-                    notify("Project downloaded.");
                   }}
                 >
                   <Download size={15} />
@@ -824,7 +1064,7 @@ export default function App() {
                 </button>
                 <button onClick={capture}>
                   <Camera size={15} />
-                  Room image <small>.png</small>
+                  {Place} image <small>.png</small>
                 </button>
               </div>
             )}
@@ -850,13 +1090,13 @@ export default function App() {
             <div>
               <span className="eyebrow">MAKE IT YOURS</span>
               <h2>
-                In your room{" "}
+                In your {place}{" "}
                 <span>{activeCount.toString().padStart(2, "0")}</span>
               </h2>
             </div>
             <button
               className="mobile-close icon-button"
-              aria-label="Close furniture panel"
+              aria-label={`Close ${pieces} panel`}
               onClick={() => setMobilePanel(null)}
             >
               <X size={18} />
@@ -903,19 +1143,19 @@ export default function App() {
           </div>
           <button className="add-furniture" onClick={() => setModal("catalog")}>
             <Plus size={16} />
-            Add furniture<span>↗</span>
+            Add {pieces}<span>↗</span>
           </button>
           <div className="structure-card">
             <div className="structure-icon">
               <Layers3 size={19} strokeWidth={1.4} />
             </div>
             <div>
-              <strong>The room itself</strong>
-              <span>Walls, windows & floor</span>
+              <strong>The {place} itself</strong>
+              <span>{space === "retail" ? "Walls, entrance & floor" : "Walls, windows & floor"}</span>
             </div>
             <button
               className="icon-button"
-              aria-label="Edit room dimensions"
+              aria-label={`Edit ${place} dimensions`}
               onClick={() => {
                 setRoomDraft(clone(project.room));
                 setModal("room");
@@ -930,7 +1170,7 @@ export default function App() {
                 <Box size={16} />
               </span>
               <span>
-                <strong>Built from your walkthrough</strong>
+                <strong>{space === "retail" ? "Starts from a sample floor plan" : "Built from your walkthrough"}</strong>
                 <small>Measurements are estimated</small>
               </span>
             </div>
@@ -945,7 +1185,7 @@ export default function App() {
         <section
           className="stage"
           data-mode={mode}
-          aria-label="Room design workspace"
+          aria-label={`${Place} design workspace`}
         >
           <RoomCanvas
             state={sceneState}
@@ -962,7 +1202,7 @@ export default function App() {
             <h1>
               A little shift.
               <br />
-              <em>A whole new room.</em>
+              <em>A whole new {place}.</em>
             </h1>
             <p>Select a piece. Try something new in its place.</p>
           </div>
@@ -1008,7 +1248,7 @@ export default function App() {
           {!ready && !sceneError && (
             <div className="stage-loading">
               <span />
-              Making room for you…
+              {space === "retail" ? "Setting up your store…" : "Making room for you…"}
             </div>
           )}
           {sceneError && (
@@ -1017,11 +1257,11 @@ export default function App() {
               <strong>The 3D view couldn’t start</strong>
               <p>{sceneError}</p>
               <small>
-                Your furniture and layout controls are still available.
+                Your {pieces} and layout controls are still available.
               </small>
             </div>
           )}
-          <LayoutAgentComposer ref={agentInput} value={layoutRequest} busy={agentBusy} disabled={presenting} hidden={presenting||mode==='walk'||!!replacementDraft||!!productPreview} reply={layoutReply} onStop={stopAgent} canReset={project.activeLayoutId!=='original'&&project.layouts.some(l=>l.id==='original')} onChange={setLayoutRequest} onAsk={askLayout} onDismiss={()=>setLayoutReply(null)}/>
+          <LayoutAgentComposer ref={agentInput} space={space} value={layoutRequest} busy={agentBusy} disabled={presenting} hidden={presenting||mode==='walk'||!!replacementDraft||!!productPreview} reply={layoutReply} onStop={stopAgent} canReset={project.activeLayoutId!=='original'&&project.layouts.some(l=>l.id==='original')} onChange={setLayoutRequest} onAsk={askLayout} onDismiss={()=>setLayoutReply(null)}/>
           <div className="stage-bottom">
             <div className="view-options">
               <button
@@ -1087,18 +1327,18 @@ export default function App() {
             onClick={() => setMobilePanel("items")}
           >
             <Menu size={16} />
-            Furniture <span>{activeCount}</span>
+            {Pieces} <span>{activeCount}</span>
           </button>
         </section>
         <aside
           className={`properties-panel ${mobilePanel === "properties" ? "mobile-open" : ""} ${walkthrough.view?'walkthrough-panel':''}`}
         >
-          {walkthrough.view ? <LayoutExplainerPanel {...walkthrough.view} onToggle={walkthrough.toggle} onNext={walkthrough.next} onPrevious={walkthrough.previous} onReplay={walkthrough.replay} onClose={cancelWalkthrough} onFinish={walkthrough.finish} onSeek={walkthrough.seek} onSpeed={walkthrough.speed}/> : productPreview && productPreview.layoutId === layout.id ? (
-            <ProductPreviewPanel product={productPreview.product} candidate={productPreview.candidate} original={layout.items.find(i => i.id === productPreview.originalId) ?? null} layout={layout} room={project.room} showAfter={showReplacement} onCompare={setShowReplacement} onFocus={() => controller.current?.focusItem?.(productPreview.candidate.id)} onBack={() => { const preview = productPreview; setProductPreview(null); openProducts(layout.items.find(i => i.id === preview.originalId) ?? null, preview.product.id); }} onConfirm={() => {
+          {walkthrough.view ? <LayoutExplainerPanel {...walkthrough.view} space={space} onToggle={walkthrough.toggle} onNext={walkthrough.next} onPrevious={walkthrough.previous} onReplay={walkthrough.replay} onClose={cancelWalkthrough} onFinish={walkthrough.finish} onSeek={walkthrough.seek} onSpeed={walkthrough.speed}/> : productPreview && productPreview.layoutId === layout.id ? (
+            <ProductPreviewPanel space={spaceOf(project)} product={productPreview.product} candidate={productPreview.candidate} original={layout.items.find(i => i.id === productPreview.originalId) ?? null} layout={layout} room={project.room} showAfter={showReplacement} onCompare={setShowReplacement} onFocus={() => controller.current?.focusItem?.(productPreview.candidate.id)} onBack={() => { const preview = productPreview; setProductPreview(null); openProducts(layout.items.find(i => i.id === preview.originalId) ?? null, preview.product.id); }} onConfirm={() => {
               const preview = productPreview;
               if (preview.layoutId !== layout.id || (preview.originalId && (!layout.items.some(i => i.id === preview.originalId) || layout.items.find(i => i.id === preview.originalId)?.locked))) { notify("The layout changed. Review this product again before using it."); return; }
               const accepted = editLayout(l => { if (preview.originalId) l.items = l.items.map(i => i.id === preview.originalId ? clone(preview.candidate) : i); else l.items.push(clone(preview.candidate)); });
-              if (accepted) { setSelectedId(preview.candidate.id); setProductPreview(null); setTab("object"); notify("Product saved. Undo restores the previous room layout."); }
+              if (accepted) { setSelectedId(preview.candidate.id); setProductPreview(null); setTab("object"); notify(`Product saved. Undo restores the previous ${place} layout.`); }
             }} />
           ) : replacementDraft && selected ? (
             <ReplacementPanel
@@ -1107,6 +1347,7 @@ export default function App() {
               candidate={replacementDraft}
               layout={layout}
               room={project.room}
+              space={space}
               showAfter={showReplacement}
               onCompare={setShowReplacement}
               onChange={setReplacementDraft}
@@ -1162,7 +1403,7 @@ export default function App() {
                     <span className="eyebrow">
                       {selected.dimensionSource === "product"
                         ? "NEW POSSIBILITY"
-                        : "YOUR FURNITURE"}
+                        : space === "retail" ? "YOUR FIXTURE" : "YOUR FURNITURE"}
                     </span>
                     <div className="selected-title">
                       <h2>{selected.name}</h2>
@@ -1183,7 +1424,7 @@ export default function App() {
                       </button>
                     </div>
                     <div className="object-preview">
-                      {(!selected.assetId?.startsWith('local:')||selectedProductPhoto)&&<img
+                      {(selected.assetId?.startsWith('local:')?selectedProductPhoto:selected.assetId||kindsForSpace("room").includes(selected.kind))&&<img
                         className="object-render-preview"
                         src={selected.assetId?.startsWith('local:')?selectedProductPhoto:`/assets/thumbnails/${selected.assetId?.startsWith("builtin:") ? selected.assetId.slice(8) : selected.kind}.png`}
                         alt={selected.name}
@@ -1440,7 +1681,7 @@ export default function App() {
                     like to move?
                   </h2>
                   <p>
-                    Select something in the room or from your furniture list to
+                    Select something in the {place} or from your {pieces} list to
                     explore its possibilities.
                   </p>
                   <div className="empty-divider" />
@@ -1474,7 +1715,7 @@ export default function App() {
                   <p>Try a quieter neutral or a little more personality.</p>
                   <div className="property-section">
                     <div className="section-label">
-                      ROOM WALLS
+                      {place.toUpperCase()} WALLS
                       <label className="custom-color">
                         <Plus size={12} />
                         <input
@@ -1548,7 +1789,7 @@ export default function App() {
                 />
                 {issues.length
                   ? `${issues.length} placement ${issues.length === 1 ? "note" : "notes"}`
-                  : "Room to move, room to breathe"}
+                  : space === "retail" ? "Space to move, space to browse" : "Room to move, room to breathe"}
                 <button
                   aria-label="Show placement notes"
                   onClick={() => {
@@ -1572,7 +1813,7 @@ export default function App() {
       </main>
       <section className="layouts-section" aria-label="Saved layouts">
         <div className="layouts-intro">
-          <span className="eyebrow">SAME ROOM, NEW POSSIBILITIES</span>
+          <span className="eyebrow">SAME {place.toUpperCase()}, NEW POSSIBILITIES</span>
           <h2>Find your flow.</h2>
           <p>Choose a layout. Watch it come together.</p>
         </div>
@@ -1622,7 +1863,7 @@ export default function App() {
       </section>
       <footer className="page-footer">
         <span>
-          <i />A room that feels a little more like you.
+          <i />A {place} that feels a little more like you.
         </span>
         <span>
           Dimensions estimated <span className="footer-sep">·</span>
@@ -1639,7 +1880,7 @@ export default function App() {
       <div className="mobile-toolbar">
         <button onClick={() => setMobilePanel("items")}>
           <Layers3 size={17} />
-          Furniture
+          {Pieces}
         </button>
         <button
           onClick={() => {
@@ -1706,8 +1947,49 @@ export default function App() {
           </button>
         </div>
       )}
-      {productOpen && <ProductWorkbench autoStart={autoStartProduct} onSourceChange={changeProductSource} pipelineSession={studio.pipelineSession} pipelineJobs={studio.pipelineJobs} onCancelGeneration={studio.cancelGeneration} storageNote={studio.storageNote} original={productTarget} initialProductId={initialProductId} roomId={project.id!} roomName={project.name ?? "My bedroom"} products={studio.products} session={studio.session} onResolve={studio.resolve} onSave={studio.save} onTry={tryProduct} onClose={() => setProductOpen(false)} onImportModel={studio.importModel} onAddImage={studio.addImage} onGenerate={generateProduct}/>}
-      {costOpen && <CostTimePanel storageNote={studio.storageNote} operations={studio.operations} products={studio.products} roomId={project.id!} roomName={project.name ?? "My bedroom"} onClose={() => setCostOpen(false)}/>}
+      {productOpen && <ProductWorkbench space={space} autoStart={autoStartProduct} onSourceChange={changeProductSource} pipelineSession={studio.pipelineSession} pipelineJobs={studio.pipelineJobs} onCancelGeneration={studio.cancelGeneration} storageNote={studio.storageNote} original={productTarget} initialProductId={initialProductId} roomId={project.id!} roomName={projectName} products={studio.products} session={studio.session} onResolve={studio.resolve} onSave={studio.save} onTry={tryProduct} onClose={() => setProductOpen(false)} onImportModel={studio.importModel} onAddImage={studio.addImage} onGenerate={generateProduct}/>}
+      {costOpen && <CostTimePanel space={space} storageNote={studio.storageNote} operations={studio.operations} products={studio.products} roomId={project.id!} roomName={projectName} onClose={() => setCostOpen(false)}/>}
+      {prompt && (
+        <div className="modal-backdrop space-prompt-backdrop">
+          <section
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={prompt.kind === "conflict" ? "Changed in another tab" : prompt.kind === "unsaved" ? "Changes not saved" : "Leave this replacement"}
+          >
+            {prompt.kind === "conflict" ? (
+              <>
+                <h2>Changed in another tab.</h2>
+                <p>This {place} was saved in another tab while you had unsaved changes here. Choose which version to keep.</p>
+                <div className="space-prompt-actions">
+                  <button autoFocus className="button gold" onClick={() => resolveConflict(false)}>Load the newer version</button>
+                  <button className="button outline" onClick={() => resolveConflict(true)}>Keep my changes</button>
+                  <button className="button outline" onClick={exportProject}>Export my version</button>
+                </div>
+              </>
+            ) : prompt.kind === "unsaved" ? (
+              <>
+                <h2>Your changes aren’t saved.</h2>
+                <p>Browser storage is full or unavailable. Export a copy, or switch anyway and they stay in this tab until it closes.</p>
+                <div className="space-prompt-actions">
+                  <button autoFocus className="button gold" onClick={exportProject}>Export project</button>
+                  <button className="button outline" onClick={() => { const retry = prompt.retry; setPrompt(null); retry?.(); }}>Switch anyway</button>
+                  <button className="button outline" onClick={() => setPrompt(null)}>Stay here</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>Leave this replacement?</h2>
+                <p>Switching closes the piece you’re trying. Your saved layout stays as it is.</p>
+                <div className="space-prompt-actions">
+                  <button autoFocus className="button gold" onClick={() => setPrompt(null)}>Stay here</button>
+                  <button className="button outline" onClick={() => { const retry = prompt.retry; setPrompt(null); retry?.(); }}>Discard and switch</button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
       {modal && (
         <div
           className="modal-backdrop"
@@ -1721,9 +2003,9 @@ export default function App() {
             aria-modal="true"
             aria-label={
               modal === "catalog"
-                ? "Add furniture"
+                ? `Add ${pieces}`
                 : modal === "room"
-                  ? "Room dimensions"
+                  ? `${Place} dimensions`
                   : modal === "save"
                     ? "Save a layout"
                     : modal === "references"
@@ -1745,7 +2027,7 @@ export default function App() {
                 <p>Start with a piece, then give it the dimensions you need.</p>
                 <button className="product-catalog-entry" onClick={() => openProducts(null)}><Link2 size={23}/><span><strong>Try a product link</strong><small>Amazon, Flipkart, or your own specifications and 3D model</small></span><ArrowUpRight size={20}/></button>
                 <div className="catalog-grid">
-                  {(Object.keys(kindNames) as ItemKind[]).map((kind) => {
+                  {kindsForSpace(space).map((kind) => {
                     const Icon = kindIcons[kind];
                     return (
                       <button key={kind} onClick={() => addItem(kind)}>
@@ -1754,7 +2036,7 @@ export default function App() {
                         </span>
                         <strong>{kindNames[kind]}</strong>
                         <small>
-                          Add to your room <Plus size={11} />
+                          Add to your {place} <Plus size={11} />
                         </small>
                       </button>
                     );
@@ -1773,16 +2055,16 @@ export default function App() {
                 <span className="eyebrow">A LITTLE MORE CERTAINTY</span>
                 <h2>Make it to measure.</h2>
                 <p>
-                  These are starting estimates. Use your room’s inside
+                  These are starting estimates. Use your {place}’s inside
                   measurements to get a more useful fit.
                 </p>
                 <div className="room-dimensions">
                   {(["width", "depth", "height"] as const).map((axis) => (
                     <label key={axis}>
-                      <span>Room {axis}</span>
+                      <span>{Place} {axis}</span>
                       <div>
                         <input
-                          aria-label={`Room ${axis}`}
+                          aria-label={`${Place} ${axis}`}
                           type="number"
                           min={axis === "height" ? 2.1 : 2}
                           max={axis === "height" ? 8 : 30}
@@ -1829,11 +2111,11 @@ export default function App() {
                     });
                     setModal(null);
                     notify(
-                      "Room dimensions updated. Check your furniture placement.",
+                      `${Place} dimensions updated. Check your ${pieces} placement.`,
                     );
                   }}
                 >
-                  Update room <ArrowUpRight size={15} />
+                  Update {place} <ArrowUpRight size={15} />
                 </button>
               </>
             ) : modal === "save" ? (
@@ -1870,7 +2152,7 @@ export default function App() {
               </>
             ) : modal === "references" ? (
               <>
-                <span className="eyebrow">THE ROOM YOU STARTED WITH</span>
+                <span className="eyebrow">THE {place.toUpperCase()} YOU STARTED WITH</span>
                 <h2>Your reference library.</h2>
                 <p>
                   Add photos or a narrated walkthrough to refer to while
@@ -1911,20 +2193,20 @@ export default function App() {
                 </div>
                 <small className="muted-note">
                   References help you compare appearances. Adding a file does
-                  not automatically scan or measure the room.
+                  not automatically scan or measure the {place}.
                 </small>
               </>
             ) : (
               <>
                 <span className="eyebrow">FIND YOUR WAY AROUND</span>
-                <h2>Make yourself at home.</h2>
+                <h2>{space === "retail" ? "Walk the floor." : "Make yourself at home."}</h2>
                 <div className="help-grid">
                   <div>
                     <Box size={22} />
                     <strong>Explore in 3D</strong>
                     <p>
                       Drag an empty area to orbit. Scroll or pinch to zoom.
-                      Click a piece of furniture to select it.
+                      Click a {space === "retail" ? "fixture" : "piece of furniture"} to select it.
                     </p>
                   </div>
                   <div>
@@ -1941,7 +2223,7 @@ export default function App() {
                     <strong>Walk inside</strong>
                     <p>
                       Drag to look around. Use WASD, arrow keys or the on-screen
-                      buttons to walk. Furniture blocks your path.
+                      buttons to walk. {space === "retail" ? "Fixtures block" : "Furniture blocks"} your path.
                     </p>
                   </div>
                   <div>

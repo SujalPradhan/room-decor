@@ -7,12 +7,13 @@ import type {
   Position,
   Project,
   RoomSpec,
+  SpaceType,
 } from "./types";
 import { isSupportedAssetId } from './catalog';
 
 const EPS = 1e-6;
 export const MAX_ITEMS = 80;
-export const KINDS: ItemKind[] = [
+export const ROOM_KINDS: ItemKind[] = [
   "bed",
   "wardrobe",
   "desk",
@@ -23,6 +24,30 @@ export const KINDS: ItemKind[] = [
   "plant",
   "shelf",
 ];
+const RETAIL_ONLY_KINDS: ItemKind[] = [
+  "display-table",
+  "wall-display",
+  "testing-bar",
+  "consultation-station",
+  "hero-plinth",
+  "checkout-counter",
+  "lounge-bench",
+];
+export const RETAIL_KINDS: ItemKind[] = [
+  ...RETAIL_ONLY_KINDS,
+  "plant",
+  "stool",
+  "chair",
+  "shelf",
+];
+const ROOM_ONLY_KINDS = ROOM_KINDS.filter((kind) => !RETAIL_KINDS.includes(kind));
+export const KINDS: ItemKind[] = [...ROOM_KINDS, ...RETAIL_ONLY_KINDS];
+export function kindsForSpace(space: SpaceType | undefined): ItemKind[] {
+  return [...(space === "retail" ? RETAIL_KINDS : ROOM_KINDS)];
+}
+export function spaceOf(project: Pick<Project, "space">): SpaceType {
+  return project.space ?? "room";
+}
 const DEFAULTS: Record<
   ItemKind,
   { name: string; dimensions: Dimensions; color: string }
@@ -71,6 +96,41 @@ const DEFAULTS: Record<
     name: "Open shelf",
     dimensions: { width: 0.8, depth: 0.35, height: 1.65 },
     color: "#ad835b",
+  },
+  "display-table": {
+    name: "Display table",
+    dimensions: { width: 1.6, depth: 0.9, height: 0.95 },
+    color: "#d8c7b6",
+  },
+  "wall-display": {
+    name: "Wall display",
+    dimensions: { width: 1.8, depth: 0.45, height: 2.4 },
+    color: "#efe6da",
+  },
+  "testing-bar": {
+    name: "Testing bar",
+    dimensions: { width: 2.4, depth: 0.75, height: 1.35 },
+    color: "#c9988a",
+  },
+  "consultation-station": {
+    name: "Consultation station",
+    dimensions: { width: 1.5, depth: 0.65, height: 1.9 },
+    color: "#e4d6c8",
+  },
+  "hero-plinth": {
+    name: "Hero plinth",
+    dimensions: { width: 1.1, depth: 1.1, height: 1.7 },
+    color: "#b9826f",
+  },
+  "checkout-counter": {
+    name: "Checkout counter",
+    dimensions: { width: 2.8, depth: 0.8, height: 1.1 },
+    color: "#4a4140",
+  },
+  "lounge-bench": {
+    name: "Lounge bench",
+    dimensions: { width: 2, depth: 0.7, height: 0.8 },
+    color: "#8c5f5c",
   },
 };
 
@@ -184,6 +244,189 @@ export function createInitialProject(): Project {
   };
 }
 
+type RetailPlacement = [
+  id: string,
+  kind: ItemKind,
+  name: string,
+  x: number,
+  z: number,
+  rotation?: number,
+];
+/** Rotations turn an item's usable front: 0 faces the entrance, the others face into the store from a wall. */
+const FACE_ENTRANCE = 0,
+  FACE_BACK = Math.PI,
+  FACE_RIGHT = Math.PI / 2,
+  FACE_LEFT = -Math.PI / 2;
+const LEFT_WALL = -4.2,
+  RIGHT_WALL = 4.2;
+const SKIN_WALL = "Skincare wall",
+  COLOUR_WALL = "Colour cosmetics wall",
+  SCENT_WALL = "Fragrance wall",
+  HAIR_WALL = "Haircare wall",
+  BODY_WALL = "Body care wall",
+  GIFT_WALL = "Gifting wall";
+const CLASSIC_BOUTIQUE: RetailPlacement[] = [
+  ["hero", "hero-plinth", "Arrival hero plinth", 0, 2.7],
+  ["table-new", "display-table", "New arrivals table", 0, -0.2, FACE_RIGHT],
+  ["bar-skin", "testing-bar", "Skin testing bar", -2.2, -0.2, FACE_RIGHT],
+  ["bar-colour", "testing-bar", "Colour testing bar", 2.2, -0.2, FACE_LEFT],
+  ["wall-left-1", "wall-display", SKIN_WALL, LEFT_WALL, 4.5, FACE_RIGHT],
+  ["wall-left-2", "wall-display", BODY_WALL, LEFT_WALL, 2.65, FACE_RIGHT],
+  ["wall-left-3", "wall-display", SKIN_WALL, LEFT_WALL, 0.8, FACE_RIGHT],
+  ["wall-left-4", "wall-display", HAIR_WALL, LEFT_WALL, -1.05, FACE_RIGHT],
+  ["wall-right-1", "wall-display", COLOUR_WALL, RIGHT_WALL, 4.5, FACE_LEFT],
+  ["wall-right-2", "wall-display", COLOUR_WALL, RIGHT_WALL, 2.65, FACE_LEFT],
+  ["wall-right-3", "wall-display", SCENT_WALL, RIGHT_WALL, 0.8, FACE_LEFT],
+  ["wall-right-4", "wall-display", SCENT_WALL, RIGHT_WALL, -1.05, FACE_LEFT],
+  ["wall-front-left", "wall-display", GIFT_WALL, -2.9, 5.75, FACE_BACK],
+  ["wall-front-right", "wall-display", GIFT_WALL, 2.9, 5.75, FACE_BACK],
+  ["wall-back", "wall-display", SCENT_WALL, 3, -5.75],
+  ["checkout", "checkout-counter", "Checkout counter", 0, -4.4],
+  ["backbar-1", "shelf", "Back-bar shelf", -0.6, -5.78],
+  ["backbar-2", "shelf", "Back-bar shelf", 0.6, -5.78],
+  ["consult-a", "consultation-station", "Consultation vanity A", -3.4, -5.62],
+  ["seat-a", "chair", "Consultation chair A", -3.4, -4.75, FACE_BACK],
+  ["consult-b", "consultation-station", "Consultation vanity B", -4.12, -3, FACE_RIGHT],
+  ["seat-b", "chair", "Consultation chair B", -3.25, -3, FACE_LEFT],
+  ["bench", "lounge-bench", "Lounge bench", 4.08, -3.05, FACE_LEFT],
+  ["plant-front", "plant", "Entrance plant", -4.1, 5.65],
+  ["plant-lounge", "plant", "Lounge plant", 4.15, -5.65],
+];
+const DISCOVERY_JOURNEY: RetailPlacement[] = [
+  ["hero", "hero-plinth", "Arrival hero plinth", 1, 3.4],
+  ["table-new", "display-table", "New arrivals table", -1.95, 4.4],
+  ["wall-front-left", "wall-display", SKIN_WALL, -3.5, 1.9],
+  ["wall-front-right", "wall-display", BODY_WALL, -1.65, 1.9],
+  ["bar-skin", "testing-bar", "Skin testing bar", 0.6, -1.2],
+  ["bar-colour", "testing-bar", "Colour testing bar", 3.05, -1.2],
+  ["wall-left-1", "wall-display", GIFT_WALL, LEFT_WALL, 4.5, FACE_RIGHT],
+  ["wall-left-3", "wall-display", HAIR_WALL, LEFT_WALL, 0.5, FACE_RIGHT],
+  ["wall-left-4", "wall-display", SKIN_WALL, LEFT_WALL, -1.35, FACE_RIGHT],
+  ["wall-right-1", "wall-display", SCENT_WALL, RIGHT_WALL, 5, FACE_LEFT],
+  ["wall-right-2", "wall-display", SCENT_WALL, RIGHT_WALL, 3.2, FACE_LEFT],
+  ["wall-right-3", "wall-display", COLOUR_WALL, RIGHT_WALL, 1.4, FACE_LEFT],
+  ["wall-back", "wall-display", COLOUR_WALL, 3, -5.75],
+  ["checkout", "checkout-counter", "Checkout counter", 0.6, -4.4],
+  ["backbar-1", "shelf", "Back-bar shelf", 0, -5.78],
+  ["backbar-2", "shelf", "Back-bar shelf", 1.2, -5.78],
+  ["consult-a", "consultation-station", "Consultation vanity A", -3.4, -5.62],
+  ["seat-a", "chair", "Consultation chair A", -3.4, -4.75, FACE_BACK],
+  ["consult-b", "consultation-station", "Consultation vanity B", -4.12, -3.3, FACE_RIGHT],
+  ["seat-b", "chair", "Consultation chair B", -3.25, -3.3, FACE_LEFT],
+  ["bench", "lounge-bench", "Lounge bench", 4.08, -3.05, FACE_LEFT],
+  ["plant-front", "plant", "Entrance plant", -4.1, 5.65],
+  ["plant-lounge", "plant", "Lounge plant", 4.15, -5.65],
+];
+const OPEN_EVENT: RetailPlacement[] = [
+  ["hero", "hero-plinth", "Arrival hero plinth", -3.6, 5.1],
+  ["table-new", "display-table", "New arrivals table", -2, 5.2],
+  ["bar-skin", "testing-bar", "Skin testing bar", 2.75, 5.6, FACE_BACK],
+  ["bar-colour", "testing-bar", "Colour testing bar", 4.05, -2.7, FACE_LEFT],
+  ["wall-left-2", "wall-display", BODY_WALL, LEFT_WALL, 2.3, FACE_RIGHT],
+  ["wall-left-3", "wall-display", SKIN_WALL, LEFT_WALL, 0.48, FACE_RIGHT],
+  ["wall-left-4", "wall-display", HAIR_WALL, LEFT_WALL, -1.34, FACE_RIGHT],
+  ["wall-left-5", "wall-display", GIFT_WALL, LEFT_WALL, -3.16, FACE_RIGHT],
+  ["wall-right-1", "wall-display", COLOUR_WALL, RIGHT_WALL, 3.1, FACE_LEFT],
+  ["wall-right-2", "wall-display", COLOUR_WALL, RIGHT_WALL, 1.25, FACE_LEFT],
+  ["wall-right-3", "wall-display", SCENT_WALL, RIGHT_WALL, -0.6, FACE_LEFT],
+  ["checkout", "checkout-counter", "Checkout counter", 0.9, -4.9],
+  ["consult-a", "consultation-station", "Consultation vanity A", -3.65, -5.62],
+  ["seat-a", "chair", "Consultation chair A", -3.65, -4.85, FACE_BACK],
+  ["consult-b", "consultation-station", "Consultation vanity B", -1.9, -5.62],
+  ["seat-b", "chair", "Consultation chair B", -1.9, -4.85, FACE_BACK],
+  ["bench", "lounge-bench", "Lounge bench", 3.45, -5.6],
+];
+/** Every preset shares item IDs so switching layouts animates the same pieces across the floor. */
+function retailLayout(
+  details: Pick<Layout, "id" | "name" | "description" | "wallColor" | "accentColor">,
+  placements: RetailPlacement[],
+  finishes: Partial<Record<ItemKind, string>> = {},
+): Layout {
+  return {
+    ...details,
+    items: placements.map(([id, kind, name, x, z, rotation = FACE_ENTRANCE]) => ({
+      ...createFurnitureItem(kind),
+      id,
+      name,
+      position: { x, z },
+      rotation,
+      ...(finishes[kind] ? { color: finishes[kind] } : {}),
+    })),
+  };
+}
+export function createRetailProject(): Project {
+  const room: RoomSpec = {
+    width: 9,
+    depth: 12,
+    height: 3.6,
+    door: { wall: "front", offset: 0, width: 2.2, height: 2.7 },
+  };
+  return {
+    name: "Experiential store",
+    space: "retail",
+    version: 1,
+    room,
+    layouts: [
+      retailLayout(
+        {
+          id: "original",
+          name: "Classic boutique",
+          description:
+            "A calm, symmetrical flagship: a hero plinth on arrival, twin testing bars, lined walls, then consultation and lounge corners before checkout",
+          wallColor: "#efe4d8",
+          accentColor: "#b98474",
+        },
+        CLASSIC_BOUTIQUE,
+        { chair: "#b39a8e" },
+      ),
+      retailLayout(
+        {
+          id: "discovery-journey",
+          name: "Discovery journey",
+          description:
+            "A guided path: display runs turn visitors from the hero plinth across the testing bars, past consultation and on to checkout",
+          wallColor: "#dfe3d8",
+          accentColor: "#5f7f6f",
+        },
+        DISCOVERY_JOURNEY,
+        {
+          "testing-bar": "#8fa796",
+          "hero-plinth": "#6f8f7f",
+          "wall-display": "#e9ebe2",
+          "consultation-station": "#dfe3d8",
+          "display-table": "#c6cfc2",
+          "lounge-bench": "#5f7f6f",
+          "checkout-counter": "#3f4a45",
+          chair: "#8c9c90",
+        },
+      ),
+      retailLayout(
+        {
+          id: "open-event",
+          name: "Open event",
+          description:
+            "Everything pulled back to the walls, leaving one large central floor for launches, masterclasses and community events",
+          wallColor: "#ebe7ee",
+          accentColor: "#4b4560",
+        },
+        OPEN_EVENT,
+        {
+          "testing-bar": "#8a80a3",
+          "hero-plinth": "#5a5275",
+          "wall-display": "#eeeaf1",
+          "consultation-station": "#e2dde8",
+          "display-table": "#cfc8d8",
+          "lounge-bench": "#4b4560",
+          "checkout-counter": "#332f3f",
+          chair: "#8f86a0",
+        },
+      ),
+    ],
+    activeLayoutId: "original",
+    unit: "cm",
+  };
+}
+
 function localToWorld(item: FurnitureItem, p: Position): Position {
   const c = Math.cos(item.rotation),
     s = Math.sin(item.rotation);
@@ -243,7 +486,7 @@ function distanceToSegment(p: Position, a: Position, b: Position): number {
   );
   return Math.hypot(p.x - a.x - t * dx, p.z - a.z - t * dz);
 }
-function distanceToPolygon(p: Position, polygon: Position[]): number {
+export function distanceToPolygon(p: Position, polygon: Position[]): number {
   if (pointInPolygon(p, polygon)) return 0;
   return Math.min(
     ...polygon.map((v, i) =>
@@ -286,15 +529,32 @@ function obstructsDoor(item: FurnitureItem, room: RoomSpec): boolean {
     distanceToPolygon(hinge, polygon) < room.door.width - EPS
   );
 }
-function usageFootprint(item: FurnitureItem): Position[] | null {
-  if (item.kind !== "wardrobe" && item.kind !== "desk" && item.kind !== "shelf")
-    return null;
-  const clearance = item.kind === "desk" ? 0.75 : 0.6;
+/** Metres of floor a person needs in front of a piece. Retail depths allow for browsing and queueing. */
+const ACCESS_CLEARANCE: Partial<Record<ItemKind, number>> = {
+  wardrobe: 0.6,
+  shelf: 0.6,
+  desk: 0.75,
+  "wall-display": 1.2,
+  "testing-bar": 1.2,
+  "checkout-counter": 1.5,
+  "consultation-station": 1,
+  "display-table": 1,
+};
+/** Seats belong in the access space of what they serve. */
+const SEATED_AT: Partial<Record<ItemKind, ItemKind[]>> = {
+  desk: ["chair"],
+  "consultation-station": ["chair", "stool"],
+};
+export function usageFootprint(item: FurnitureItem): Position[] | null {
+  const clearance = ACCESS_CLEARANCE[item.kind];
+  if (clearance === undefined) return null;
   const w = item.dimensions.width / 2,
-    start = item.dimensions.depth / 2;
+    start = item.dimensions.depth / 2,
+    // Display tables stand free and are browsed from both long sides.
+    near = item.kind === "display-table" ? -start - clearance : start;
   return [
-    { x: -w, z: start },
-    { x: w, z: start },
+    { x: -w, z: near },
+    { x: w, z: near },
     { x: w, z: start + clearance },
     { x: -w, z: start + clearance },
   ].map((p) => localToWorld(item, p));
@@ -304,6 +564,7 @@ export function validatePlacement(
   item: FurnitureItem,
   items: FurnitureItem[],
   room: RoomSpec,
+  space?: SpaceType,
 ): PlacementIssue[] {
   if (!item.visible) return [];
   const issues: PlacementIssue[] = [],
@@ -316,10 +577,12 @@ export function validatePlacement(
     ) ||
     item.dimensions.height > room.height + EPS
   ) {
+    // Without an explicit space, a retail-only piece in the layout is what marks a store.
+    const retail = (space ?? (items.some((other) => RETAIL_ONLY_KINDS.includes(other.kind)) ? "retail" : "room")) === "retail";
     issues.push({
       code: "outside",
       severity: "error",
-      message: `${item.name} extends outside the room.`,
+      message: `${item.name} extends outside the ${retail ? "store" : "room"}.`,
       itemIds: [item.id],
     });
   }
@@ -343,7 +606,7 @@ export function validatePlacement(
       const usage = usageFootprint(item);
       if (
         usage &&
-        !(item.kind === "desk" && other.kind === "chair") &&
+        !SEATED_AT[item.kind]?.includes(other.kind) &&
         polygonsOverlap(usage, getFootprint(other))
       ) {
         issues.push({
@@ -360,10 +623,11 @@ export function validatePlacement(
 export function validateLayout(
   layout: Layout,
   room: RoomSpec,
+  space?: SpaceType,
 ): PlacementIssue[] {
   const seen = new Set<string>();
   return layout.items
-    .flatMap((item) => validatePlacement(item, layout.items, room))
+    .flatMap((item) => validatePlacement(item, layout.items, room, space))
     .filter((issue) => {
       const key = `${issue.code}:${issue.code === "clearance" ? issue.itemIds.join(":") : [...issue.itemIds].sort().join(":")}`;
       if (seen.has(key)) return false;
@@ -402,8 +666,9 @@ export function canStand(
   );
 }
 
+const FAILED_ROOM = "Could not open this room: ";
 function fail(message: string): never {
-  throw new Error(`Could not open this room: ${message}`);
+  throw new Error(`${FAILED_ROOM}${message}`);
 }
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -497,16 +762,44 @@ export function upgradeRetiredPresets(project: Project): Project {
   return project;
 }
 
-export function parseProject(text: string): Project {
-  if (text.length > 2_000_000) fail("The project is too large (maximum 2 MB).");
-  let raw: unknown;
+function itemKinds(raw: unknown): unknown[] {
+  const layouts = (raw as { layouts?: unknown } | null)?.layouts;
+  return Array.isArray(layouts)
+    ? layouts.flatMap((layout) => {
+        const items = (layout as { items?: unknown } | null)?.items;
+        return Array.isArray(items) ? items.map((item) => (item as { kind?: unknown } | null)?.kind) : [];
+      })
+    : [];
+}
+/**
+ * Contents decide the space. `space` says which space is open, so a file that cannot even be read
+ * still reports its failure as a store.
+ */
+export function parseProject(text: string, space?: SpaceType): Project {
+  let store = space === "retail";
   try {
-    raw = JSON.parse(text);
-  } catch {
-    fail("The file is not valid JSON.");
+    if (text.length > 2_000_000) fail("The project is too large (maximum 2 MB).");
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      fail("The file is not valid JSON.");
+    }
+    store ||=
+      (raw as { space?: unknown } | null)?.space === "retail" ||
+      itemKinds(raw).some((kind) => RETAIL_ONLY_KINDS.includes(kind as ItemKind));
+    return readProject(raw);
+  } catch (error) {
+    if (store && error instanceof Error && error.message.startsWith(FAILED_ROOM))
+      throw new Error(`Could not open this store: ${error.message.slice(FAILED_ROOM.length)}`);
+    throw error;
   }
+}
+function readProject(raw: unknown): Project {
   const p = object(raw, "Project");
   if (p.version !== 1) fail("This project version is not supported.");
+  if (p.space !== undefined && p.space !== "room" && p.space !== "retail")
+    fail("Unknown space type.");
   const r = object(p.room, "Room"),
     d = object(r.door, "Door");
   const room: RoomSpec = {
@@ -558,7 +851,15 @@ export function parseProject(text: string): Project {
   if (!layouts.some((l) => l.id === activeLayoutId))
     fail("The active layout does not exist.");
   if (p.unit !== "cm" && p.unit !== "in") fail("Use centimetres or inches.");
-  return { version: 1, ...(p.id === undefined ? {} : { id: string(p.id, "Room ID") }), ...(p.name === undefined ? {} : { name: string(p.name, "Room name") }), room, layouts, activeLayoutId, unit: p.unit };
+  const kinds = new Set(layouts.flatMap((l) => l.items.map((i) => i.kind))),
+    bedroomPiece = ROOM_ONLY_KINDS.find((kind) => kinds.has(kind)),
+    storePiece = RETAIL_ONLY_KINDS.find((kind) => kinds.has(kind));
+  if (bedroomPiece && storePiece)
+    fail(`A project cannot mix bedroom furniture (${bedroomPiece}) with store fixtures (${storePiece}).`);
+  if (bedroomPiece && p.space === "retail")
+    fail(`A store cannot hold bedroom furniture (${bedroomPiece}).`);
+  const space = storePiece ? "retail" : p.space;
+  return { version: 1, ...(p.id === undefined ? {} : { id: string(p.id, "Room ID") }), ...(p.name === undefined ? {} : { name: string(p.name, "Room name") }), ...(space === undefined ? {} : { space: space as SpaceType }), room, layouts, activeLayoutId, unit: p.unit };
 }
 export function serializeProject(project: Project): string {
   return JSON.stringify(parseProject(JSON.stringify(project)), null, 2);

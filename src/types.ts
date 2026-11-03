@@ -7,7 +7,15 @@ export type ItemKind =
   | "pedestal-fan"
   | "stool"
   | "plant"
-  | "shelf";
+  | "shelf"
+  | "display-table"
+  | "wall-display"
+  | "testing-bar"
+  | "consultation-station"
+  | "hero-plinth"
+  | "checkout-counter"
+  | "lounge-bench";
+export type SpaceType = "room" | "retail";
 export type ViewMode = "orbit" | "plan" | "walk";
 export interface Dimensions {
   width: number;
@@ -49,6 +57,8 @@ export interface Layout {
 export interface Project {
   id?: string;
   name?: string;
+  /** Absent means a home room, which every project saved before retail is. */
+  space?: SpaceType;
   version: 1;
   room: RoomSpec;
   layouts: Layout[];
@@ -62,6 +72,8 @@ export interface PlacementIssue {
   itemIds: string[];
 }
 export interface SceneState {
+  /** Decides store or home decor. Absent means a home room. */
+  space?: SpaceType;
   presentation?:boolean;
   ghostItem?: FurnitureItem | null;
   room: RoomSpec;

@@ -1,10 +1,12 @@
 import { Check, ChevronLeft, ChevronRight, Pause, Play, RotateCcw, SkipForward, X } from 'lucide-react';
 import type { CSSProperties } from 'react';
+import type { SpaceType } from './types';
 import type { LayoutExplanationPlan } from './layout-explainer';
 import './layout-explainer.css';
 
 export interface LayoutExplainerPanelProps {
   plan: LayoutExplanationPlan;
+  space?: SpaceType;
   stepIndex: number;
   elapsedMs: number;
   playing: boolean;
@@ -25,8 +27,8 @@ function seconds(ms: number): string {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
 
-export default function LayoutExplainerPanel({plan,stepIndex,elapsedMs,playing,finished,completed,speed,onToggle,onNext,onPrevious,onReplay,onClose,onFinish,onSeek,onSpeed}:LayoutExplainerPanelProps) {
-  const total=Math.max(0,plan.totalDurationMs),elapsed=Math.min(total,Math.max(0,elapsedMs));
+export default function LayoutExplainerPanel({plan,space,stepIndex,elapsedMs,playing,finished,completed,speed,onToggle,onNext,onPrevious,onReplay,onClose,onFinish,onSeek,onSpeed}:LayoutExplainerPanelProps) {
+  const place=space==='retail'?'store':'room',total=Math.max(0,plan.totalDurationMs),elapsed=Math.min(total,Math.max(0,elapsedMs));
   const current=Math.max(0,Math.min(plan.steps.length-1,stepIndex));
   const step=plan.steps[current];
   const percent=total>0?Math.round(elapsed/total*100):finished?100:0;
@@ -63,7 +65,7 @@ export default function LayoutExplainerPanel({plan,stepIndex,elapsedMs,playing,f
       </div>
       {plan.steps.length>0&&<ol className="le-step-list" aria-label="Layout changes">{plan.steps.map((item,index)=><li key={item.id??index}><button type="button" onClick={()=>onSeek(offsets[index])} className={index===current&&!finished?'is-current':''} aria-current={index===current&&!finished?'step':undefined} aria-label={`Go to step ${index+1}: ${item.title}`}><span className={`le-step-number ${index<current||finished?'is-done':''}`}>{index<current||finished?<Check size={12}/>:index+1}</span><span>{item.title}</span><span className="le-step-duration">{seconds(item.durationMs)}</span></button></li>)}</ol>}
       {(plan.summary||plan.warnings.length>0)&&<div className="le-notes"><strong>Keep in mind</strong><ul><li>{plan.summary}</li>{plan.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul></div>}
-      <p className="le-local-note">{plan.byAgent?<>Chosen by the room agent.<br/>{plan.steps.some(item=>item.agentReason)?'Every change passed the room checks; figures are measured here.':'Figures are measured here.'}</>:<>Prepared layouts · plays on your device.<br/>No AI calls for layout playback.</>}</p>
+      <p className="le-local-note">{plan.byAgent?<>Chosen by the {place} agent.<br/>{plan.steps.some(item=>item.agentReason)?`Every change passed the ${place} checks; figures are measured here.`:'Figures are measured here.'}</>:<>Prepared layouts · plays on your device.<br/>No AI calls for layout playback.</>}</p>
     </div>
     <footer className="le-footer">{completed?<button className="le-finish" type="button" onClick={onClose}>Close walkthrough <Check size={16}/></button>:<><button className="le-finish" type="button" onClick={onFinish}>{plan.steps.length?'Skip to layout':'Use this layout'} <SkipForward size={16}/></button><button className="le-text-button" type="button" onClick={onClose}>Cancel walkthrough</button></>}</footer>
   </section>;
