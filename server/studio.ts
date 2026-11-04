@@ -1,6 +1,4 @@
-import { runLayoutAgent, LayoutAgentError } from "./layout-agent";
-import { parseProject } from "../src/domain";
-import type { Project } from "../src/types";
+import { askLayoutModel, layoutProviders, readLayoutAgentInput, LayoutAgentError, type LayoutAgentInput } from "./layout-agent";
 import { handlePipelineRequest } from "./local-pipeline";
 import type {
   OperationRecord,
@@ -540,28 +538,39 @@ async function getAsset(env: StudioEnv, repo: StudioRepository, id: string) {
     },
   });
 }
-/** Off unless enabled; a deployment without the public switch answers 503 and the app uses its rules. */
+/**
+ * Off unless enabled; a deployment without the public switch answers 503 and the app uses its rules.
+ * The browser runs the agent loop and every layout check, so this answers one model call per request.
+ */
 async function layoutAgent(request: Request, url: URL, env: StudioEnv) {
   if (env.STUDIO_LAYOUT_AGENT_ENABLED !== "true" || (env.STUDIO_LAYOUT_AGENT_PUBLIC !== "true" && !["127.0.0.1", "localhost"].includes(url.hostname)))
     throw new StudioError(503, "LAYOUT_AGENT_UNAVAILABLE", "The room agent is not available here.");
-  const data = await readJson(request);
-  if (typeof data.request !== "string" || !data.request.trim() || data.request.length > 200)
-    throw new StudioError(400, "INVALID_REQUEST", "Describe what you want in up to 200 characters.");
-  let project: Project;
-  try { project = parseProject(JSON.stringify(data.project)); }
-  catch { throw new StudioError(400, "INVALID_PROJECT", "This room could not be read."); }
-  // The public endpoint has no sign-in, so one site-wide budget bounds what the provider keys can spend.
+  let input: LayoutAgentInput;
+  try { input = readLayoutAgentInput(await readJson(request)); }
+  catch (error) {
+    if (error instanceof LayoutAgentError) throw new StudioError(400, error.code === "INVALID_REQUEST" ? "INVALID_REQUEST" : "INVALID_SITUATION", error.message);
+    throw error;
+  }
+  let providers: ReturnType<typeof layoutProviders>;
+  try { providers = layoutProviders({ foundryToken: env.FOUNDRY_API_KEY, aipipeToken: env.AIPIPE_API_KEY, foundryModel: env.LAYOUT_AGENT_FOUNDRY_MODEL, aipipeModel: env.LAYOUT_AGENT_AIPIPE_MODEL }); }
+  catch { throw new StudioError(503, "LAYOUT_AGENT_UNAVAILABLE", "The room agent is not available here."); }
+  // The public endpoint has no sign-in, so one site-wide budget bounds what the provider keys can spend. Every model call counts.
+  // The call is charged before it runs, so a burst of parallel requests can never overshoot the limits; charging after
+  // success would let them all pass the check before any was counted. The charge is refunded only when every provider
+  // turned the call down outright. A call cut off mid-flight may already have spent tokens, so aborting is no way round the budget.
+  let budget: { fetch(url: string): Promise<Response> } | undefined;
   if (env.STUDIO_LAYOUT_AGENT_PUBLIC === "true") {
     if (!env.LAYOUT_AGENT_BUDGET)
       throw new StudioError(503, "LAYOUT_AGENT_UNAVAILABLE", "The room agent is not available here.");
-    const budget = env.LAYOUT_AGENT_BUDGET.get(env.LAYOUT_AGENT_BUDGET.idFromName("site") as never);
+    budget = env.LAYOUT_AGENT_BUDGET.get(env.LAYOUT_AGENT_BUDGET.idFromName("site") as never);
     if (!(await budget.fetch("https://budget/spend")).ok)
       throw new StudioError(429, "LAYOUT_AGENT_BUSY", "The room agent is busy. Try again later.");
   }
   try {
-    return json(await runLayoutAgent(data.request.trim(), project, { foundryToken: env.FOUNDRY_API_KEY, aipipeToken: env.AIPIPE_API_KEY, foundryModel: env.LAYOUT_AGENT_FOUNDRY_MODEL, aipipeModel: env.LAYOUT_AGENT_AIPIPE_MODEL }));
+    return json(await askLayoutModel(input, providers, request.signal));
   } catch (error) {
-    if (error instanceof LayoutAgentError) throw new StudioError(502, "LAYOUT_AGENT_FAILED", "The room agent could not answer.");
+    if (error instanceof LayoutAgentError && error.code === "PROVIDER_REFUSED") await budget?.fetch("https://budget/refund").catch(() => undefined);
+    if (error instanceof LayoutAgentError) throw new StudioError(502, error.code === "INVALID_RESPONSE" ? "LAYOUT_AGENT_BAD_REPLY" : "LAYOUT_AGENT_FAILED", "The room agent could not answer.");
     throw error;
   }
 }

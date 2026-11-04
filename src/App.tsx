@@ -88,11 +88,10 @@ import LayoutAgentComposer,{type LayoutAgentReply} from "./LayoutAgentComposer";
 import {useLayoutWalkthrough} from "./useLayoutWalkthrough";
 import {matchLayoutIntent} from "./layout-intent";
 import type {LayoutAgentResult} from "./layout-agent-types";
-import {readLayoutAgentResult} from "./layout-agent-client";
-import {studioRequest} from "./product-client";
+import {askLayoutAgent,LayoutAgentHttpError,readLayoutAgentResult} from "./layout-agent-client";
 import { useProductStudio } from "./useProductStudio";
 import { productToFurniture, generatedProductToFurniture, isSafeProductImageUrl } from "./product-domain";
-import { chooseProductPosition, readPlacementIntents, type ProductPlacementIntent } from "./automatic-products";
+import { chooseProductPosition, placeProduct, readPlacementIntents, WALL_KINDS, type ProductPlacementIntent } from "./automatic-products";
 import { createLocalOperation } from "./ledger";
 import type { ProductDraft } from "./product-types";
 import {
@@ -102,14 +101,18 @@ import {
 } from "./measurements";
 
 const STORAGE_KEY = "roomshift-project-v1";
-const STORE_STORAGE_KEY = "roomshift-store-project-v1";
+/** v2 is the 20 × 28 m flagship; a saved 9 × 12 m store under v1 is left where it is. */
+const STORE_STORAGE_KEY = "roomshift-store-project-v2";
 const SPACE_KEY = "roomshift-space-v1";
+/** The store saved before the flagship. It is never deleted; the first visit to the store offers to open it once. */
+const EARLIER_STORE_KEY = "roomshift-store-project-v1", EARLIER_STORE_OFFERED_KEY = "roomshift-store-v1-offered";
 const storageKey = (space: SpaceType) => (space === "retail" ? STORE_STORAGE_KEY : STORAGE_KEY);
 const defaultName = (space: SpaceType) => (space === "retail" ? "Experiential store" : "My bedroom");
 const spaces = [
   { id: "room", label: "Bedroom", Icon: BedDouble },
   { id: "retail", label: "Store", Icon: Store },
 ] as const;
+import { DoorClosed, Gift, MonitorPlay, ScanFace, Sparkles, SprayCan } from "lucide-react";
 const kindIcons: Record<ItemKind, LucideIcon> = {
   bed: BedDouble,
   wardrobe: PanelTop,
@@ -127,6 +130,13 @@ const kindIcons: Record<ItemKind, LucideIcon> = {
   "hero-plinth": Gem,
   "checkout-counter": CreditCard,
   "lounge-bench": Sofa,
+  "fragrance-tower": SprayCan,
+  "skin-analyzer": ScanFace,
+  "beauty-chair": Armchair,
+  "service-cabin": DoorClosed,
+  "digital-wall": MonitorPlay,
+  "gift-station": Gift,
+  "mirror-station": Sparkles,
 };
 const kindNames: Record<ItemKind, string> = {
   bed: "Wooden bed",
@@ -145,6 +155,13 @@ const kindNames: Record<ItemKind, string> = {
   "hero-plinth": "Hero plinth",
   "checkout-counter": "Checkout counter",
   "lounge-bench": "Lounge bench",
+  "fragrance-tower": "Fragrance tower",
+  "skin-analyzer": "Skin analyzer",
+  "beauty-chair": "Beauty chair",
+  "service-cabin": "Service cabin",
+  "digital-wall": "Digital wall",
+  "gift-station": "Gift station",
+  "mirror-station": "Mirror station",
 };
 const colors = [
   "#d3c7b0",
@@ -166,7 +183,7 @@ const furnitureColors = [
 ];
 type Modal = "catalog" | "room" | "references" | "help" | "save" | null;
 /** Decisions about saved work. Kept apart from Modal because switching and walkthroughs close that one. */
-type SpacePrompt = { kind: "conflict" | "unsaved" | "draft"; retry?: () => void };
+type SpacePrompt = { kind: "conflict" | "unsaved" | "draft" | "earlier-store"; retry?: () => void };
 const ROOM_KIND_IN_STORE = "Room furniture cannot go in a store. Try a plant, stool, chair or shelf instead.";
 function clone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x));
@@ -212,6 +229,17 @@ function loadProject(space: SpaceType): Loaded {
     return loaded(fresh, { notice: `Your saved ${word} could not be read, so a new one was started. The old data was kept in this browser as ${key}.corrupt.` });
   } catch {
     return loaded(fresh, { held: true, notice: `Your saved ${word} could not be read or backed up, so it was left in place and changes here will not be saved. Export your project to keep a copy.` });
+  }
+}
+/** The store saved under the earlier key, when it can still be opened as a store. */
+function earlierStore(): Project | null {
+  const raw = readStored(EARLIER_STORE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = upgradeRetiredPresets(parseProject(raw));
+    return spaceOf(parsed) === "retail" ? { ...parsed, id: parsed.id ?? crypto.randomUUID(), name: parsed.name ?? "My earlier store" } : null;
+  } catch {
+    return null;
   }
 }
 function downloadFile(name: string, text: string, type = "application/json") {
@@ -473,7 +501,7 @@ export default function App() {
   });
   const presenting=Boolean(walkthrough.view&&!walkthrough.view.finished);
   const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState<LayoutAgentReply|null>(null),agentInput=useRef<HTMLInputElement>(null),[agentBusy,setAgentBusy]=useState(false);
-  const agentAbort=useRef<AbortController|null>(null),movedOn=useRef(false);
+  const agentAbort=useRef<AbortController|null>(null),movedOn=useRef(false),[agentAttempt,setAgentAttempt]=useState(1);
   const startPreset=(targetId:string,request?:string,byAgent=false)=>{
     const current=projectRef.current,target=current.layouts.find(l=>l.id===targetId);
     if(!target||(!presenting&&current.activeLayoutId===targetId))return;
@@ -551,17 +579,19 @@ export default function App() {
     if(asked.layouts.length>=12){useRules(request,'12 layouts reached · delete one to use the agent');return;}
     if(walkthrough.view)walkthrough.close();
     const controller=new AbortController();agentAbort.current=controller;
-    setAgentBusy(true);setLayoutReply(null);
+    setAgentBusy(true);setAgentAttempt(1);setLayoutReply(null);
     const stale=()=>movedOn.current||projectRef.current!==asked;
     const movedAway=()=>setLayoutReply({text:'You moved on while the agent was working, so nothing changed. Ask again when you are ready.'});
     let result:LayoutAgentResult;
     try{
-      const reply=await studioRequest<unknown>('/api/layout-agent',{method:'POST',body:JSON.stringify({request,project:asked}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(70000)])});
+      const reply=await askLayoutAgent(request,asked,{signal:controller.signal,onAttempt:setAgentAttempt});
       result=readLayoutAgentResult(reply,asked);
-    }catch{
+    }catch(error){
       if(controller.signal.aborted)return;
       setAgentBusy(false);
-      if(stale())movedAway();else useRules(request,'Agent unavailable · keyword rules');
+      // The quick rules answer instead, and the note says why in plain words.
+      const busy=error instanceof LayoutAgentHttpError&&error.status===429;
+      if(stale())movedAway();else useRules(request,busy?'The agent is busy right now, so quick rules answered':'The agent could not answer just now, so quick rules answered');
       return;
     }
     if(controller.signal.aborted)return;
@@ -663,7 +693,7 @@ export default function App() {
           if(!candidate.assetId||!await getLocalModel(candidate.assetId))throw Error('The generated model is temporarily unavailable.');
           if(!appAlive.current||!autoIntents.current.has(intent.id)||placementScope.current!==placementKey)return;
           if(!kindsForSpace(spaceOf(current)).includes(candidate.kind)){autoIntents.current.delete(intent.id);saveIntents();notify(ROOM_KIND_IN_STORE);return;}
-          if(!replace){candidate.id=`product-${intent.id}`;candidate=chooseProductPosition(candidate,target,current.room);}
+          if(!replace){candidate.id=`product-${intent.id}`;candidate=chooseProductPosition(candidate,target,current.room,{space:spaceOf(current)});}
           const accepted=commit(p=>{
             let destination=p.layouts.find(l=>l.id===intent.layoutId);if(!destination)throw Error('The destination layout changed.');
             if(destination.id==='original'){
@@ -763,6 +793,25 @@ export default function App() {
       controller.current?.resetView();
     }
   }, [space]);
+  const earlierOffered = useRef(false);
+  useEffect(() => {
+    if (space !== "retail" || earlierOffered.current) return;
+    earlierOffered.current = true;
+    if (readStored(EARLIER_STORE_OFFERED_KEY) || !earlierStore()) return;
+    // Offered once: either answer, or dismissing it, keeps the choice.
+    try { localStorage.setItem(EARLIER_STORE_OFFERED_KEY, "1"); } catch { /* Offered again next visit. */ }
+    setPrompt((old) => old ?? { kind: "earlier-store" });
+  }, [space]);
+  const openEarlierStore = () => {
+    setPrompt(null);
+    const earlier = earlierStore();
+    if (!earlier || spaceOf(projectRef.current) !== "retail") return;
+    walkthrough.close();
+    if (commit((p) => Object.assign(p, earlier))) {
+      setSelectedId(null); setReplacementDraft(null); setProductPreview(null); setLayoutReply(null);
+      notify("Your earlier store is open. Undo brings back the flagship.", 8000);
+    }
+  };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (promptRef.current) {
@@ -880,19 +929,22 @@ export default function App() {
     });
   };
   const addItem = (kind: ItemKind) => {
-    const item = createFurnitureItem(kind);
+    let item = createFurnitureItem(kind);
     item.position = { x: 0, z: 1.5 };
-    let crowded = false;
+    let placed: ReturnType<typeof placeProduct> | null = null;
     if (space === "retail") {
-      const { x, z } = chooseProductPosition(item, layout, project.room).position;
-      item.position = { x: Math.round(x * 100) / 100, z: Math.round(z * 100) / 100 };
-      crowded = validateLayout({ ...layout, items: [...layout.items, item] }, project.room).some((i) => i.severity === "error" && i.itemIds.includes(item.id));
+      // Near the piece the person is working on, otherwise near the centre.
+      placed = placeProduct(item, layout, project.room, { space, near: selected?.position });
+      item = placed.item;
     }
     if (editLayout((l) => l.items.push(item))) {
       setSelectedId(item.id);
       setModal(null);
       setTab("object");
-      notify(crowded ? `${item.name} added, but the floor has no free spot left. Drag it into place.` : `${item.name} added. Drag it into place.`);
+      notify(!placed ? `${item.name} added. Drag it into place.`
+        : placed.errors ? `${item.name} added, but there is no free spot left in the ${place}. Drag it somewhere, or make room first.`
+        : placed.warnings ? `${item.name} added in the clearest spot left, which still crowds a nearby piece. Drag it, or make room first.`
+        : `${item.name} added in a clear spot${WALL_KINDS.includes(kind) ? " against a wall" : ""}. Drag it to move it.`, 6000);
     }
   };
   const saveLayout = () => {
@@ -1261,7 +1313,7 @@ export default function App() {
               </small>
             </div>
           )}
-          <LayoutAgentComposer ref={agentInput} space={space} value={layoutRequest} busy={agentBusy} disabled={presenting} hidden={presenting||mode==='walk'||!!replacementDraft||!!productPreview} reply={layoutReply} onStop={stopAgent} canReset={project.activeLayoutId!=='original'&&project.layouts.some(l=>l.id==='original')} onChange={setLayoutRequest} onAsk={askLayout} onDismiss={()=>setLayoutReply(null)}/>
+          <LayoutAgentComposer ref={agentInput} space={space} value={layoutRequest} busy={agentBusy} attempt={agentAttempt} disabled={presenting} hidden={presenting||mode==='walk'||!!replacementDraft||!!productPreview} reply={layoutReply} onStop={stopAgent} canReset={project.activeLayoutId!=='original'&&project.layouts.some(l=>l.id==='original')} onChange={setLayoutRequest} onAsk={askLayout} onDismiss={()=>setLayoutReply(null)}/>
           <div className="stage-bottom">
             <div className="view-options">
               <button
@@ -1955,7 +2007,7 @@ export default function App() {
             className="modal"
             role="alertdialog"
             aria-modal="true"
-            aria-label={prompt.kind === "conflict" ? "Changed in another tab" : prompt.kind === "unsaved" ? "Changes not saved" : "Leave this replacement"}
+            aria-label={prompt.kind === "conflict" ? "Changed in another tab" : prompt.kind === "unsaved" ? "Changes not saved" : prompt.kind === "earlier-store" ? "Your earlier store" : "Leave this replacement"}
           >
             {prompt.kind === "conflict" ? (
               <>
@@ -1965,6 +2017,15 @@ export default function App() {
                   <button autoFocus className="button gold" onClick={() => resolveConflict(false)}>Load the newer version</button>
                   <button className="button outline" onClick={() => resolveConflict(true)}>Keep my changes</button>
                   <button className="button outline" onClick={exportProject}>Export my version</button>
+                </div>
+              </>
+            ) : prompt.kind === "earlier-store" ? (
+              <>
+                <h2>Your earlier store is still here.</h2>
+                <p>The store now starts as the 20 × 28 m flagship. The store you saved before is still kept in this browser. Open it to carry on where you left off, and Undo brings the flagship back. Or keep the flagship; your earlier store stays saved.</p>
+                <div className="space-prompt-actions">
+                  <button autoFocus className="button gold" onClick={openEarlierStore}>Open my earlier store</button>
+                  <button className="button outline" onClick={() => setPrompt(null)}>Keep the flagship</button>
                 </div>
               </>
             ) : prompt.kind === "unsaved" ? (

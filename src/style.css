@@ -1244,8 +1244,26 @@ h2 {
   overflow: hidden;
 }
 .mini-plan-inner.store-floor {
-  background: repeating-conic-gradient(#e4dcd0 0% 25%, #d7cdbe 0% 50%) 0 0 / 14px 14px;
+  background: repeating-conic-gradient(#e7e0d6 0% 25%, #e0d8cc 0% 50%) 0 0 / 8px 8px;
   border-color: #d8cfc1;
+}
+/* A flagship holds dozens of small fixtures, so store thumbnails drop the per-piece borders and shadows. */
+.store-floor .mini-item {
+  border: 0;
+  box-shadow: none;
+  min-width: 1.5px;
+  min-height: 1.5px;
+}
+.store-floor .mini-fragrance-tower,
+.store-floor .mini-hero-plinth {
+  border-radius: 50%;
+}
+.store-floor .mini-service-cabin {
+  outline: 1px solid #0003;
+  outline-offset: -1px;
+}
+.store-floor .mini-digital-wall {
+  background-color: #2a2730 !important;
 }
 .mini-item {
   position: absolute;

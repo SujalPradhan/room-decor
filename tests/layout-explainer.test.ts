@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createFurnitureItem, createInitialProject, createRetailProject, getFootprint, upgradeRetiredPresets, validateLayout } from '../src/domain';
 import { buildLayoutExplanation, openFloorArea, sampleLayoutExplanation, sampleLayoutTransition, shortestYawDelta } from '../src/layout-explainer';
 import { matchLayoutIntent } from '../src/layout-intent';
+import { agentReasonFor, highlightFor } from '../src/useLayoutWalkthrough';
 import type { ItemKind, Layout, RoomSpec } from '../src/types';
 
 const project = createInitialProject();
@@ -277,5 +278,116 @@ describe('explicit space', () => {
   });
   it('leaves a bedroom request with an edit verb as it was', () => {
     expect(matchLayoutIntent('move things for work', bedroom.layouts, 'original', bedroom.room).targetId).toBe('work-rest');
+  });
+});
+
+describe('large switches play as a short story of chapters', () => {
+  const store = createRetailProject(), { room } = store;
+  const pairs = store.layouts.flatMap(from => store.layouts.filter(to => to !== from).map(to => [from, to] as const));
+  const starts = (plan: ReturnType<typeof buildLayoutExplanation>) => plan.steps.map((_, index) => plan.steps.slice(0, index).reduce((sum, step) => sum + step.durationMs, 0));
+  const byId = (layout: Layout) => [...layout.items].sort((a, b) => a.id.localeCompare(b.id));
+  const metres = (value: number) => Number(value.toFixed(2)).toString();
+  it('tells each flagship switch in a handful of chapters, each long enough to watch', () => {
+    for (const [from, to] of pairs) {
+      const plan = buildLayoutExplanation(from, to, room), chapters = plan.steps.filter(step => step.kind !== 'finish');
+      expect(chapters.length, `${from.id} → ${to.id}`).toBeGreaterThanOrEqual(4);
+      expect(chapters.length).toBeLessThanOrEqual(9);
+      expect(plan.steps.at(-1)?.kind).toBe('finish');
+      for (const step of plan.steps) { expect(step.durationMs).toBeGreaterThanOrEqual(1200); expect(step.durationMs).toBeLessThanOrEqual(2000); }
+      expect(plan.totalDurationMs).toBeGreaterThanOrEqual(9500);
+      expect(plan.totalDurationMs).toBeLessThanOrEqual(12000);
+      // Every changed piece belongs to exactly one chapter, and the lead piece is one of its parts.
+      const changed = new Set([...from.items, ...to.items].map(item => item.id).filter(id => JSON.stringify(from.items.find(item => item.id === id)) !== JSON.stringify(to.items.find(item => item.id === id))));
+      const moved = chapters.flatMap(step => step.parts!.map(part => part.itemId)), recoloured = plan.steps.at(-1)!.parts?.map(part => part.itemId) ?? [];
+      expect(new Set(moved).size).toBe(moved.length);
+      expect(new Set([...moved, ...recoloured])).toEqual(changed);
+      for (const step of chapters) expect(step.parts!.map(part => part.itemId)).toContain(step.itemId);
+    }
+  });
+  it('measures every why in sequence, so no chapter contradicts another', () => {
+    for (const [from, to] of pairs) {
+      const plan = buildLayoutExplanation(from, to, room), offsets = starts(plan);
+      plan.steps.forEach((step, index) => {
+        if (step.kind === 'finish') return;
+        const before = sampleLayoutExplanation(from, to, plan, offsets[index]).layout, after = sampleLayoutExplanation(from, to, plan, offsets[index] + step.durationMs).layout;
+        const floorBefore = openFloorArea(before, room), floorAfter = openFloorArea(after, room), change = floorAfter - floorBefore, why = step.why ?? '';
+        if (change >= .05) expect(why).toContain(`Opens ${metres(change)} m² of continuous floor (${metres(floorBefore)} → ${metres(floorAfter)} m²).`);
+        else if (change <= -.05) expect(why).toContain(`Uses ${metres(-change)} m² of the largest open area (${metres(floorBefore)} → ${metres(floorAfter)} m²)`);
+        else expect(why).toContain(`The largest open area stays at ${metres(floorAfter)} m².`);
+        const issuesBefore = validateLayout(before, room).length, issuesAfter = validateLayout(after, room).length;
+        if (issuesAfter < issuesBefore) expect(why).toContain(`(${issuesBefore} → ${issuesAfter}).`);
+        else if (issuesAfter > issuesBefore) expect(why).toContain(`Crowded spots go from ${issuesBefore} to ${issuesAfter} for now`);
+        else expect(why).not.toMatch(/placement finding|crowded spot/i);
+        expect(why).not.toMatch(/Leaves the largest open area as it is/);
+      });
+      expect(plan.steps.at(-1)!.why).toContain(`from ${metres(plan.startOpenFloor)} to ${metres(plan.endOpenFloor)} m²`);
+    }
+  });
+  it('never shows a colour code, and puts colour changes into plain words at the end', () => {
+    for (const [from, to] of pairs) {
+      const plan = buildLayoutExplanation(from, to, room), words = [plan.summary, ...plan.steps.flatMap(step => [step.title, step.description, step.why ?? ''])].join(' ');
+      expect(words).not.toMatch(/#[\da-f]{3,8}\b/i);
+      expect(words).not.toMatch(/\b(rooms?|bed|bedroom|furniture)\b/i);
+      const finish = plan.steps.at(-1)!;
+      expect(finish.title).toBe(`New finishes for ${to.name}`);
+      expect(finish.description).toMatch(/^(Warmer|Cooler|Lighter|Darker|Subtly different)[^.]* finishes on the /);
+      for (const step of plan.steps.slice(0, -1)) for (const part of step.parts!) if (part.from && part.to) expect(part.to.color).toBe(part.from.color);
+    }
+  });
+  it('moves a chapter’s pieces together and ends exactly on the target layout', () => {
+    for (const [from, to] of pairs) {
+      const plan = buildLayoutExplanation(from, to, room), offsets = starts(plan), chapter = plan.steps.findIndex(step => step.parts!.filter(part => part.from && part.to).length > 1);
+      const middle = sampleLayoutExplanation(from, to, plan, offsets[chapter] + plan.steps[chapter].durationMs / 2);
+      expect(middle).toMatchObject({ stepIndex: chapter, finished: false });
+      for (const part of plan.steps[chapter].parts!.filter(part => part.from && part.to && Math.hypot(part.to.position.x - part.from.position.x, part.to.position.z - part.from.position.z) > .1)) {
+        const piece = middle.layout.items.find(item => item.id === part.itemId)!;
+        expect(Math.hypot(piece.position.x - part.from!.position.x, piece.position.z - part.from!.position.z)).toBeGreaterThan(.01);
+        expect(Math.hypot(piece.position.x - part.to!.position.x, piece.position.z - part.to!.position.z)).toBeGreaterThan(.01);
+      }
+      const lateFinish = sampleLayoutExplanation(from, to, plan, plan.totalDurationMs - 1);
+      expect(byId(lateFinish.layout)).toEqual(byId(to));
+      expect(lateFinish.layout.wallColor).toBe(to.wallColor);
+      expect(sampleLayoutExplanation(from, to, plan, plan.totalDurationMs)).toMatchObject({ layout: to, finished: true, stepProgress: 1 });
+      expect(sampleLayoutExplanation(from, to, plan, 0).layout).toEqual(from);
+    }
+  });
+  it('builds the largest flagship switch quickly', () => {
+    const [from, to] = [store.layouts.find(layout => layout.id === 'open-event')!, store.layouts.find(layout => layout.id === 'services-first')!];
+    buildLayoutExplanation(from, to, room);
+    const start = performance.now();
+    buildLayoutExplanation(from, to, room);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+  it('keeps agent reasons on grouped steps and outlines one piece only for a single-piece step', () => {
+    const plan = buildLayoutExplanation(store.layouts[0], store.layouts[1], room), chapter = plan.steps.find(step => step.parts!.length > 2)!;
+    const [first, second] = chapter.parts!, reasons = { [first.itemId]: 'Clears the avenue.', [second.itemId]: 'Clears the avenue.', finish: 'Calmer colours.' };
+    expect(agentReasonFor(chapter, reasons)).toBe('Clears the avenue.');
+    expect(agentReasonFor(plan.steps.at(-1)!, reasons)).toContain('Calmer colours.');
+    expect(agentReasonFor(chapter, undefined)).toBeUndefined();
+    expect(highlightFor(chapter)).toBeUndefined();
+    const bedroom = buildLayoutExplanation(original, airy, project.room);
+    expect(agentReasonFor(bedroom.steps[0], { bed: 'Against the wall.' })).toBe('Against the wall.');
+    expect(highlightFor(bedroom.steps[0])).toBe('bed');
+  });
+  it('keeps small switches and the bedroom exactly as they were: one piece per step, same order and reasons', () => {
+    expect(buildLayoutExplanation(original, airy, project.room).steps.map(step => [step.id, step.durationMs, step.why ?? null])).toEqual([
+      ['change:bed', 900, 'Opens 1.51 m² of continuous floor (4.54 → 6.05 m²). Sits 0.57 m closer to the wall.'],
+      ['change:fan', 900, 'Opens 2.48 m² of continuous floor (6.05 → 8.53 m²). Sits 0.25 m closer to the wall.'],
+      ['change:wardrobe', 900, 'Clears a placement finding.'],
+      ['change:desk', 900, 'Leaves the largest open area as it is; this is where Open & airy puts it.'],
+      ['change:chair', 900, 'Leaves the largest open area as it is; this is where Open & airy puts it.'],
+      ['change:stool', 900, 'Sits 0.5 m closer to the wall.'],
+      ['change:floor-bed', 900, 'On its own this takes 1.38 m² from the largest open area; it is part of the full Open & airy arrangement. Sits 0.07 m closer to the wall. Clears a placement finding.'],
+      ['finish', 650, 'Largest open floor area goes from 4.54 to 7.14 m².'],
+    ]);
+    for (const from of project.layouts) for (const to of project.layouts) if (from !== to) for (const step of buildLayoutExplanation(from, to, project.room).steps) expect(step).not.toHaveProperty('parts');
+    // Twelve changed fixtures in the store still play one at a time, colour codes and all.
+    const [first] = store.layouts, twelve = { ...structuredClone(first), id: 'twelve', items: first.items.map((item, index) => index < 12 ? { ...item, position: { x: item.position.x, z: item.position.z - .2 } } : item) };
+    const plan = buildLayoutExplanation(first, twelve, room);
+    expect(plan.steps.filter(step => step.kind !== 'finish')).toHaveLength(12);
+    for (const step of plan.steps) expect(step).not.toHaveProperty('parts');
+    expect(plan.totalDurationMs).toBeLessThanOrEqual(8000);
+    const thirteen = { ...twelve, items: twelve.items.map((item, index) => index === 12 ? { ...item, position: { x: item.position.x, z: item.position.z - .2 } } : item) };
+    expect(buildLayoutExplanation(first, thirteen, room).steps[0]).toHaveProperty('parts');
   });
 });

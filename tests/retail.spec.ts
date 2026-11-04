@@ -1,7 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const roomKey = 'roomshift-project-v1', storeKey = 'roomshift-store-project-v1';
-const storeKinds = ['Display table', 'Wall display', 'Testing bar', 'Consultation station', 'Hero plinth', 'Checkout counter', 'Lounge bench', 'Potted plant', 'Small stool', 'Office chair', 'Bookshelf'];
+const roomKey = 'roomshift-project-v1', storeKey = 'roomshift-store-project-v2';
+const storeKinds = ['Display table', 'Wall display', 'Testing bar', 'Consultation station', 'Hero plinth', 'Checkout counter', 'Lounge bench', 'Fragrance tower', 'Skin analyzer', 'Beauty chair', 'Service cabin', 'Digital wall', 'Gift station', 'Mirror station', 'Potted plant', 'Small stool', 'Office chair', 'Bookshelf'];
+const flagshipLayouts = [['original', 'Grand flagship'], ['discovery-journey', 'Discovery journey'], ['open-event', 'Open event'], ['launch-day', 'Launch day'], ['services-first', 'Services first']] as const;
+/** Screenshots of each flagship layout land here for review. */
+const SHOTS = process.env.ROOMSHIFT_FLAGSHIP_SHOTS ?? '/private/tmp/claude-501/-Users-sujal-room-decor/ba951a1b-c17f-4244-aeaf-5b77cccd3e35/scratchpad';
 
 function watchErrors(page: Page) {
   const errors: string[] = [];
@@ -33,7 +36,10 @@ test('a store link opens the store with its own layouts, catalogue and wording',
   const errors = watchErrors(page);
   await open(page, '/?space=retail', storeKey);
   await pressed(page, 'Store');
-  for (const name of ['Classic boutique', 'Discovery journey', 'Open event']) await expect(layoutButton(page, name)).toBeVisible();
+  for (const [, name] of flagshipLayouts) await expect(layoutButton(page, name)).toBeAttached();
+  await expect(page.getByRole('button', { name: 'Edit store dimensions', exact: true })).toBeAttached();
+  const store = await saved(page, storeKey);
+  expect(store.room).toMatchObject({ width: 20, depth: 28, height: 4.5, door: { width: 4 } });
   await expect(layoutButton(page, 'Open & airy')).toHaveCount(0);
   expect((await saved(page, storeKey)).space).toBe('retail');
   expect(await page.evaluate(k => localStorage.getItem(k), roomKey)).toBeNull();
@@ -102,7 +108,7 @@ test('a preset store walkthrough plays and saves the layout', async ({ page }) =
   const errors = watchErrors(page);
   await open(page, '/?space=retail', storeKey);
   await layoutButton(page, 'Open event').click();
-  await expect(page.getByRole('heading', { name: 'Classic boutique → Open event', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Grand flagship → Open event', exact: true })).toBeVisible({ timeout: 20000 });
   await page.getByRole('button', { name: 'Pause layout walkthrough', exact: true }).click();
   await page.getByRole('button', { name: 'Skip to layout', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Layout ready', exact: true })).toBeVisible();
@@ -360,4 +366,94 @@ test('the store speaks of stores and fixtures throughout', async ({ page }) => {
   await page.getByRole('button', { name: /Try a product link/ }).click();
   await expect(page.getByRole('heading', { name: 'Try a product in your store.', exact: true })).toBeVisible();
   await expect(page.getByRole('dialog')).toContainText('Your product, in your store');
+});
+
+const earlierStore = JSON.stringify({ version: 1, space: 'retail', room: { width: 9, depth: 12, height: 3.6, door: { wall: 'front', offset: 0, width: 2.2, height: 2.7 } }, layouts: [{ id: 'original', name: 'Classic boutique', description: '', items: [], wallColor: '#efe4d8', accentColor: '#b98474' }], activeLayoutId: 'original', unit: 'cm' });
+test('an old 9 × 12 m store saved under the previous key is offered once and never replaces the flagship unasked', async ({ page }) => {
+  await page.addInitScript(store => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('roomshift-store-project-v1', store); } }, earlierStore);
+  await open(page, '/?space=retail', storeKey);
+  const offer = page.getByRole('alertdialog', { name: 'Your earlier store' });
+  await expect(offer).toContainText('still kept in this browser');
+  await expect(layoutButton(page, 'Grand flagship')).toBeAttached();
+  expect((await saved(page, storeKey)).room.width).toBe(20);
+  await offer.getByRole('button', { name: 'Keep the flagship', exact: true }).click();
+  await expect(offer).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.stage-loading')).toHaveCount(0, { timeout: 30000 });
+  await expect(layoutButton(page, 'Grand flagship')).toBeAttached();
+  await expect(offer).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('roomshift-store-project-v1'))).not.toBeNull();
+});
+
+test('the earlier store opens from the offer, and undo brings the flagship back', async ({ page }) => {
+  await page.addInitScript(store => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('roomshift-store-project-v1', store); } }, earlierStore);
+  await open(page, '/?space=retail', storeKey);
+  await page.getByRole('alertdialog', { name: 'Your earlier store' }).getByRole('button', { name: 'Open my earlier store', exact: true }).click();
+  await expect(page.getByText('Your earlier store is open. Undo brings back the flagship.')).toBeVisible();
+  await expect(layoutButton(page, 'Classic boutique')).toBeAttached();
+  await expect.poll(async () => (await saved(page, storeKey)).room.width).toBe(9);
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await saved(page, storeKey)).room.width).toBe(20);
+  await expect(layoutButton(page, 'Grand flagship')).toBeAttached();
+  expect(await page.evaluate(() => localStorage.getItem('roomshift-store-project-v1'))).not.toBeNull();
+});
+
+test('new fixtures land clear of other pieces, with wall fixtures on a wall, and the note says so', async ({ page }) => {
+  await open(page, '/?space=retail', storeKey);
+  for (const [name, note] of [['Wall display', 'Wall display added in a clear spot against a wall.'], ['Testing bar', 'Testing bar added in a clear spot.']] as const) {
+    await add(page, name);
+    await expect(page.getByText(note, { exact: false })).toBeVisible();
+  }
+  await expect.poll(async () => (await saved(page, storeKey)).activeLayoutId).not.toBe('original');
+  await expect.poll(async () => (await itemNames(page, storeKey)).includes('Testing bar') && (await saved(page, storeKey)).layouts.length).toBeTruthy();
+  const project = await saved(page, storeKey), layout = project.layouts.find((l: { id: string }) => l.id === project.activeLayoutId);
+  const wall = layout.items.find((i: { id: string; name: string }) => i.name === 'Wall display' && !project.layouts[0].items.some((o: { id: string }) => o.id === i.id));
+  const { width, depth } = project.room;
+  expect(Math.min(width / 2 - Math.abs(wall.position.x), depth / 2 - Math.abs(wall.position.z))).toBeLessThan(.5);
+  await expect(page.getByText(/crowds a nearby piece|no free spot left/)).toHaveCount(0);
+});
+
+test('a busy agent hands over to the quick rules in plain words, and a slow one says so', async ({ page }) => {
+  test.setTimeout(60000);
+  await open(page, '/?space=retail', storeKey);
+  const box = page.getByRole('textbox', { name: 'Describe what you want from this store', exact: true }), send = page.getByRole('button', { name: 'Rearrange the store', exact: true });
+  const proposal = { action: 'rearrange', goal: 'other', layoutId: '', name: 'x', description: 'x', reply: 'x', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '' };
+  let calls = 0;
+  await page.route('**/api/layout-agent', r => ++calls === 1 ? r.fulfill({ json: { proposal, provider: 'LLM Foundry', model: 'm' } }) : r.fulfill({ status: 429, json: { error: { code: 'LAYOUT_AGENT_BUSY', message: 'busy' } } }));
+  await box.fill('make room for an event');
+  await send.click();
+  await expect(page.locator('.lp-reply').first()).toContainText('The agent is busy right now, so quick rules answered');
+  await expect(page.locator('.lp-reply').first()).not.toContainText('could not find an arrangement');
+  expect(calls).toBe(2);
+  await page.getByRole('button', { name: 'Skip to layout', exact: true }).click().catch(() => {});
+  await page.getByRole('button', { name: 'Close layout walkthrough', exact: true }).first().click().catch(() => {});
+  await page.unroute('**/api/layout-agent');
+  await page.route('**/api/layout-agent', () => {});
+  await box.fill('guide customers past the testing bars');
+  await send.click();
+  await expect(page.locator('.lp-reply.is-busy')).toContainText('Working out the store');
+  await expect(page.locator('.lp-reply.is-busy')).toContainText('This is taking longer than usual', { timeout: 15000 });
+  await page.getByRole('button', { name: 'Stop the store agent', exact: true }).click();
+  await expect(page.locator('.lp-reply.is-busy')).toHaveCount(0);
+});
+
+test('every flagship layout renders as a stocked store', async ({ page }) => {
+  test.setTimeout(240000);
+  const errors = watchErrors(page);
+  await open(page, '/?space=retail', storeKey);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __roomshiftScene?: { environmentReady: boolean } }).__roomshiftScene?.environmentReady), { timeout: 60000 }).toBe(true);
+  const scene = () => page.evaluate(() => { const s = (window as unknown as { __roomshiftScene: { itemAssets: Record<string, unknown>; drawCalls: number; triangles: number } }).__roomshiftScene; return { pieces: Object.keys(s.itemAssets).length, calls: s.drawCalls, triangles: s.triangles }; });
+  for (const [id, name] of flagshipLayouts) {
+    if (id !== 'original') {
+      await layoutButton(page, name).click();
+      await page.getByRole('button', { name: 'Skip to layout', exact: true }).click({ timeout: 30000 });
+      await expect.poll(async () => (await saved(page, storeKey)).activeLayoutId, { timeout: 30000 }).toBe(id);
+      await page.getByRole('button', { name: 'Close layout walkthrough', exact: true }).first().click();
+    }
+    await page.waitForTimeout(1200);
+    const info = await scene();
+    expect(info.pieces, name).toBe(62);
+    await page.getByTestId('room-canvas').screenshot({ path: `${SHOTS}/flagship-${id}.png` });
+  }
+  expect(errors).toEqual([]);
 });

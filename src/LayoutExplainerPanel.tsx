@@ -23,6 +23,10 @@ export interface LayoutExplainerPanelProps {
   onSpeed: (speed: number) => void;
 }
 
+/** "9 pieces" for a chapter step that moves several pieces together; nothing for a single-piece step. */
+function piecesLabel(step: LayoutExplanationPlan['steps'][number]): string {
+  return step.kind !== 'finish' && step.parts && step.parts.length > 1 ? `${step.parts.length} pieces` : '';
+}
 function seconds(ms: number): string {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
@@ -32,7 +36,7 @@ export default function LayoutExplainerPanel({plan,space,stepIndex,elapsedMs,pla
   const current=Math.max(0,Math.min(plan.steps.length-1,stepIndex));
   const step=plan.steps[current];
   const percent=total>0?Math.round(elapsed/total*100):finished?100:0;
-  const announcement=finished?'Layout ready. The walkthrough is complete.':step?`Step ${current+1} of ${plan.steps.length}. ${step.title}. ${step.description} ${step.agentReason??''} ${step.why??''}`:'No furniture moves to show.';
+  const announcement=finished?'Layout ready. The walkthrough is complete.':step?`Step ${current+1} of ${plan.steps.length}${piecesLabel(step)?`, ${piecesLabel(step)} together`:''}. ${step.title}. ${step.description} ${step.agentReason??''} ${step.why??''}`:'No furniture moves to show.';
   let offset=0;
   const offsets=plan.steps.map(item=>{const start=offset;offset+=Math.max(0,item.durationMs);return start;});
   return <section className="layout-explainer" aria-labelledby="layout-walkthrough-heading">
@@ -63,7 +67,7 @@ export default function LayoutExplainerPanel({plan,space,stepIndex,elapsedMs,pla
         </div>
         <div className="le-playback-options"><button className="le-text-button" type="button" onClick={onReplay} disabled={!plan.steps.length} aria-label="Restart layout walkthrough"><RotateCcw size={13}/> Replay</button><label className="le-speed">Speed<select value={speed} onChange={event=>onSpeed(Number(event.target.value))} aria-label="Walkthrough playback speed"><option value={0.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option></select></label></div>
       </div>
-      {plan.steps.length>0&&<ol className="le-step-list" aria-label="Layout changes">{plan.steps.map((item,index)=><li key={item.id??index}><button type="button" onClick={()=>onSeek(offsets[index])} className={index===current&&!finished?'is-current':''} aria-current={index===current&&!finished?'step':undefined} aria-label={`Go to step ${index+1}: ${item.title}`}><span className={`le-step-number ${index<current||finished?'is-done':''}`}>{index<current||finished?<Check size={12}/>:index+1}</span><span>{item.title}</span><span className="le-step-duration">{seconds(item.durationMs)}</span></button></li>)}</ol>}
+      {plan.steps.length>0&&<ol className="le-step-list" aria-label="Layout changes">{plan.steps.map((item,index)=><li key={item.id??index}><button type="button" onClick={()=>onSeek(offsets[index])} className={index===current&&!finished?'is-current':''} aria-current={index===current&&!finished?'step':undefined} aria-label={`Go to step ${index+1}: ${item.title}${piecesLabel(item)?`, ${piecesLabel(item)}`:''}`}><span className={`le-step-number ${index<current||finished?'is-done':''}`}>{index<current||finished?<Check size={12}/>:index+1}</span><span className="le-step-title">{item.title}{piecesLabel(item)&&<small className="le-step-pieces">{piecesLabel(item)}</small>}</span><span className="le-step-duration">{seconds(item.durationMs)}</span></button></li>)}</ol>}
       {(plan.summary||plan.warnings.length>0)&&<div className="le-notes"><strong>Keep in mind</strong><ul><li>{plan.summary}</li>{plan.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul></div>}
       <p className="le-local-note">{plan.byAgent?<>Chosen by the {place} agent.<br/>{plan.steps.some(item=>item.agentReason)?`Every change passed the ${place} checks; figures are measured here.`:'Figures are measured here.'}</>:<>Prepared layouts · plays on your device.<br/>No AI calls for layout playback.</>}</p>
     </div>

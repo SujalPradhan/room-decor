@@ -14,7 +14,14 @@ export type ItemKind =
   | "consultation-station"
   | "hero-plinth"
   | "checkout-counter"
-  | "lounge-bench";
+  | "lounge-bench"
+  | "fragrance-tower"
+  | "skin-analyzer"
+  | "beauty-chair"
+  | "service-cabin"
+  | "digital-wall"
+  | "gift-station"
+  | "mirror-station";
 export type SpaceType = "room" | "retail";
 export type ViewMode = "orbit" | "plan" | "walk";
 export interface Dimensions {

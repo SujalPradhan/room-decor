@@ -41,6 +41,8 @@ test('mobile playback leaves the room visible and reduced motion switches withou
  await expect.poll(async()=>(await saved(page)).activeLayoutId).toBe('open-airy');await page.getByRole('button',{name:'Close layout walkthrough',exact:true}).first().click();await page.reload();await expect(page.getByRole('button',{name:'Switch to Open & airy',exact:true})).toHaveAttribute('aria-pressed','true');
 });
 
+/** What the endpoint answers: one model proposal. The browser runs the checks and builds the layout. */
+const agentReply=(_active:any,extra:object={})=>({proposal:{action:'rearrange',goal:'other',layoutId:'',name:'Stool tucked',description:'Checked',reply:'Moved the stool.',moves:[{itemId:'stool',x:.2,z:-2.1,rotationDegrees:0,reason:'Out of the way.'}],removals:[],recolors:[],additions:[],wallColor:'',accentColor:'',colorReason:'',...extra},provider:'LLM Foundry',model:'test'});
 test('a typed request runs the measured walkthrough without any generation call, and unmatched requests change nothing',async({page})=>{
  let generationCalls=0;page.on('request',r=>{if(r.method()==='POST'&&/\/api\//.test(new URL(r.url()).pathname))generationCalls++;}); // One unavailable agent call per prompt, then rules.
  await page.route('**/api/layout-agent',r=>r.fulfill({status:503,contentType:'application/json',body:'{"error":{"code":"LAYOUT_AGENT_UNAVAILABLE","message":"Local only."}}'}));
@@ -52,25 +54,34 @@ test('a typed request runs the measured walkthrough without any generation call,
 
 test('an agent arrangement shows its reasons, saves as one undoable layout, and is discarded on cancel',async({page})=>{
  await room(page);const before=await saved(page),active=before.layouts[0];
- const layout={...active,id:'agent-test',name:'Stool tucked',description:'Checked by the room',items:active.items.map((i:any)=>i.id==='stool'?{...i,position:{x:.2,z:-2.1}}:i)};
- await page.route('**/api/layout-agent',r=>r.fulfill({json:{action:'rearrange',layout,reasons:{stool:'Out of the walkway.'},reply:'Moved the stool.',provider:'LLM Foundry',model:'test',attempts:1,elapsedMs:1200}}));
+ await page.route('**/api/layout-agent',r=>r.fulfill({json:agentReply(active,{moves:[{itemId:'stool',x:.2,z:-2.1,rotationDegrees:0,reason:'Out of the walkway.'}]})}));
  const prompt=page.getByRole('textbox',{name:'Describe what you want from this room',exact:true}),send=page.getByRole('button',{name:'Rearrange the room',exact:true});
  await prompt.fill('tuck the stool away');await send.click();await page.getByRole('button',{name:'Pause layout walkthrough',exact:true}).click();await expect(page.locator('.le-why').first()).toContainText('Out of the walkway.');
  await page.getByRole('button',{name:'Cancel layout walkthrough',exact:true}).click();expect((await saved(page)).layouts.length).toBe(before.layouts.length);
- await send.click();await page.getByRole('button',{name:'Skip to layout',exact:true}).click();await expect.poll(async()=>(await saved(page)).activeLayoutId).toBe('agent-test');await page.getByRole('button',{name:'Close layout walkthrough',exact:true}).first().click();
+ await send.click();await page.getByRole('button',{name:'Skip to layout',exact:true}).click();await expect.poll(async()=>(await saved(page)).activeLayoutId).toMatch(/^agent-/);await page.getByRole('button',{name:'Close layout walkthrough',exact:true}).first().click();
  await page.keyboard.press('Control+z');await expect.poll(async()=>(await saved(page)).activeLayoutId).toBe('original');expect((await saved(page)).layouts).toEqual(before.layouts);
 });
 
-const agentReply=(active:any,extra:object={})=>({action:'rearrange',layout:{...active,id:'agent-test',name:'Stool tucked',description:'Checked',items:active.items.map((i:any)=>i.id==='stool'?{...i,position:{x:.2,z:-2.1}}:i)},reasons:{stool:'Out of the way.'},reply:'Moved the stool.',provider:'LLM Foundry',model:'test',attempts:1,elapsedMs:900,...extra});
 const box=(page:Page)=>page.getByRole('textbox',{name:'Describe what you want from this room',exact:true});
 const send=(page:Page)=>page.getByRole('button',{name:'Rearrange the room',exact:true});
 
 test('malformed agent replies fall back to rules without breaking the app',async({page})=>{
  await room(page);const active=(await saved(page)).layouts[0],good=agentReply(active);
- for(const body of [{},{action:'decline',reply:{a:1},model:'m',provider:'p',elapsedMs:1},{...good,reasons:{stool:{a:1}}},{...good,layout:{id:'x'}},{action:'use_layout',layoutId:'nope',reply:'Switched!',model:'m',provider:'p',elapsedMs:1},{...good,layout:{...good.layout,items:active.items}}]){
+ for(const body of [{},'text',{proposal:{action:'decline',reply:{a:1}},model:'m',provider:'p'},{...good,provider:5},{...good,proposal:'text'},{proposal:{...good.proposal,action:'dance'},model:'m',provider:'p'}]){
   await page.unroute('**/api/layout-agent').catch(()=>{});await page.route('**/api/layout-agent',r=>r.fulfill({json:body}));
   await box(page).fill('paint it purple');await send(page).click();await expect(page.locator('.lp-reply')).toContainText('I can only switch');await expect(page.locator('canvas')).toBeVisible();await expect(page.locator('.layout-explainer')).toHaveCount(0);
  }
+});
+
+test('the browser checks send a bad proposal back, show the retry, and give up after three tries',async({page})=>{
+ await room(page);const active=(await saved(page)).layouts[0];let release:()=>void=()=>{};const gate=new Promise<void>(r=>{release=r;});const bodies:any[]=[];
+ await page.route('**/api/layout-agent',async r=>{bodies.push(r.request().postDataJSON());if(bodies.length===2)await gate;await r.fulfill({json:agentReply(active,{moves:[{itemId:'stool',x:-.25,z:-1.45,rotationDegrees:0,reason:'Same.'}]})}).catch(()=>{});});
+ await box(page).fill('tuck the stool');await send(page).click();
+ await expect(page.locator('.lp-reply.is-busy')).toContainText('Try 2 of 3');release();
+ await expect(page.locator('.lp-reply')).toContainText('could not find an arrangement that passes the room checks');expect(bodies).toHaveLength(3);
+ expect(Object.keys(bodies[0]).sort()).toEqual(['request','situation']);expect(bodies[0].situation.furniture.length).toBe(active.items.length);expect(bodies[0]).not.toHaveProperty('project');
+ expect(bodies[1].previous.problems).toEqual(['That changes nothing in the room.']);
+ await expect(page.locator('.layout-explainer')).toHaveCount(0);expect((await saved(page)).layouts.length).toBe(3);
 });
 
 test('a late agent reply never overrides what the user did, and the request can be stopped',async({page})=>{
@@ -79,7 +90,9 @@ test('a late agent reply never overrides what the user did, and the request can 
  await box(page).fill('tuck the stool');await send(page).click();await page.getByRole('button',{name:'Switch to Open & airy',exact:true}).click();await page.getByRole('button',{name:'Skip to layout',exact:true}).click();release();
  await expect(page.locator('.lp-reply')).toContainText('You moved on');await expect.poll(async()=>(await saved(page)).activeLayoutId).toBe('open-airy');expect((await saved(page)).layouts.length).toBe(3);
  await page.unroute('**/api/layout-agent');await page.route('**/api/layout-agent',()=>{});await page.getByRole('button',{name:'Close walkthrough',exact:true}).click();
- await box(page).fill('tuck the stool');await send(page).click();let asks=0;page.on('request',r=>{if(r.url().includes('/api/layout-agent'))asks++;});await page.getByRole('button',{name:'Stop the room agent',exact:true}).click();await expect(page.getByRole('button',{name:'Stop the room agent',exact:true})).toHaveCount(0);await expect(page.locator('.lp-reply')).toHaveCount(0);await expect(box(page)).toBeFocused();await send(page).dblclick();await expect(page.getByRole('button',{name:'Stop the room agent',exact:true})).toBeVisible();await page.waitForTimeout(300);expect(asks).toBe(1);await page.getByRole('button',{name:'Stop the room agent',exact:true}).dblclick();await page.waitForTimeout(300);expect(asks).toBe(1);
+ await box(page).fill('tuck the stool');await send(page).click();await page.getByRole('button',{name:'Stop the room agent',exact:true}).click();await expect(page.getByRole('button',{name:'Stop the room agent',exact:true})).toHaveCount(0);await expect(page.locator('.lp-reply')).toHaveCount(0);await expect(box(page)).toBeFocused();
+ // The browser prepares the situation before it calls, so count from here: a double click asks once, and Stop asks no more.
+ await page.waitForTimeout(300);let asks=0;page.on('request',r=>{if(r.url().includes('/api/layout-agent'))asks++;});await send(page).dblclick();await expect(page.getByRole('button',{name:'Stop the room agent',exact:true})).toBeVisible();await page.waitForTimeout(300);expect(asks).toBe(1);await page.getByRole('button',{name:'Stop the room agent',exact:true}).dblclick();await page.waitForTimeout(300);expect(asks).toBe(1);
 });
 
 test('at twelve layouts the agent says so up front, and deleting one frees a slot with undo',async({page})=>{
@@ -89,7 +102,7 @@ test('at twelve layouts the agent says so up front, and deleting one frees a slo
  await box(page).fill('tuck the stool');await send(page).click();await expect(page.locator('.lp-reply')).toContainText('delete one to use the agent');expect(calls).toBe(0);
  const card=page.locator('.layout-card-wrap').last();await card.hover();await page.getByRole('button',{name:'Delete Extra 11',exact:true}).click();await expect.poll(async()=>(await saved(page)).layouts.length).toBe(11);
  await page.keyboard.press('Control+z');await expect.poll(async()=>(await saved(page)).layouts.length).toBe(12);await page.getByRole('button',{name:'Delete Extra 11',exact:true}).focus();await page.keyboard.press('Enter');await expect.poll(async()=>(await saved(page)).layouts.length).toBe(11);
- await send(page).click();await expect(page.locator('.layout-explainer')).toBeVisible();await page.getByRole('button',{name:'Skip to layout',exact:true}).click();await expect.poll(async()=>(await saved(page)).activeLayoutId).toBe('agent-test');
+ await send(page).click();await expect(page.locator('.layout-explainer')).toBeVisible();await page.getByRole('button',{name:'Skip to layout',exact:true}).click();await expect.poll(async()=>(await saved(page)).activeLayoutId).toMatch(/^agent-/);
 });
 
 test('a manual layout switch keeps a half-typed request',async({page})=>{

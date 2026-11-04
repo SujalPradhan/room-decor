@@ -45,6 +45,7 @@
 .le-step-number { display:inline-flex; align-items:center; justify-content:center; flex:0 0 22px; height:22px; border:1px solid #ffffff20; border-radius:50%; color:#acb5a2; font-size:9px; }
 .is-current .le-step-number { border-color:#dabe8970; color:var(--gold,#dabe89); }
 .le-step-number.is-done { color:#a7bd92; background:#96ad7611; border-color:#96ad7625; }
+.le-step-pieces { display:block; margin-top:2px; color:#7e9074; font-size:9px; letter-spacing:.02em; }
 .le-step-duration { flex-shrink:0; font-size:9px; color:#7e9074; font-variant-numeric:tabular-nums; }
 .le-notes { margin-top:22px; padding:13px 14px; background:#dabe8906; border-radius:9px; color:#b3bba8; font-size:11px; line-height:1.65; }
 .le-notes strong { color:#c6c5ae; font-size:10px; font-weight:500; }

@@ -32,6 +32,13 @@ const RETAIL_ONLY_KINDS: ItemKind[] = [
   "hero-plinth",
   "checkout-counter",
   "lounge-bench",
+  "fragrance-tower",
+  "skin-analyzer",
+  "beauty-chair",
+  "service-cabin",
+  "digital-wall",
+  "gift-station",
+  "mirror-station",
 ];
 export const RETAIL_KINDS: ItemKind[] = [
   ...RETAIL_ONLY_KINDS,
@@ -131,6 +138,41 @@ const DEFAULTS: Record<
     name: "Lounge bench",
     dimensions: { width: 2, depth: 0.7, height: 0.8 },
     color: "#8c5f5c",
+  },
+  "fragrance-tower": {
+    name: "Fragrance tower",
+    dimensions: { width: 0.9, depth: 0.9, height: 2.2 },
+    color: "#d8c3a0",
+  },
+  "skin-analyzer": {
+    name: "Skin analyzer",
+    dimensions: { width: 0.8, depth: 0.6, height: 1.95 },
+    color: "#ece6de",
+  },
+  "beauty-chair": {
+    name: "Beauty chair",
+    dimensions: { width: 0.62, depth: 0.7, height: 1.15 },
+    color: "#5a4a4c",
+  },
+  "service-cabin": {
+    name: "Service cabin",
+    dimensions: { width: 2.6, depth: 2.4, height: 2.8 },
+    color: "#e8ddd2",
+  },
+  "digital-wall": {
+    name: "Digital wall",
+    dimensions: { width: 4.8, depth: 0.3, height: 3 },
+    color: "#c98f86",
+  },
+  "gift-station": {
+    name: "Gift station",
+    dimensions: { width: 1.8, depth: 0.8, height: 1.05 },
+    color: "#c9a99a",
+  },
+  "mirror-station": {
+    name: "Mirror station",
+    dimensions: { width: 1.2, depth: 0.45, height: 2 },
+    color: "#efe6da",
   },
 };
 
@@ -244,122 +286,441 @@ export function createInitialProject(): Project {
   };
 }
 
-type RetailPlacement = [
-  id: string,
-  kind: ItemKind,
-  name: string,
-  x: number,
-  z: number,
-  rotation?: number,
-];
 /** Rotations turn an item's usable front: 0 faces the entrance, the others face into the store from a wall. */
 const FACE_ENTRANCE = 0,
   FACE_BACK = Math.PI,
   FACE_RIGHT = Math.PI / 2,
   FACE_LEFT = -Math.PI / 2;
-const LEFT_WALL = -4.2,
-  RIGHT_WALL = 4.2;
-const SKIN_WALL = "Skincare wall",
+const FLAGSHIP: Dimensions = { width: 20, depth: 28, height: 4.5 };
+const WALL_GAP = 0.05;
+const SCENT_WALL = "Fragrance wall",
+  SKIN_WALL = "Skincare wall",
   COLOUR_WALL = "Colour cosmetics wall",
-  SCENT_WALL = "Fragrance wall",
   HAIR_WALL = "Haircare wall",
-  BODY_WALL = "Body care wall",
-  GIFT_WALL = "Gifting wall";
-const CLASSIC_BOUTIQUE: RetailPlacement[] = [
-  ["hero", "hero-plinth", "Arrival hero plinth", 0, 2.7],
-  ["table-new", "display-table", "New arrivals table", 0, -0.2, FACE_RIGHT],
-  ["bar-skin", "testing-bar", "Skin testing bar", -2.2, -0.2, FACE_RIGHT],
-  ["bar-colour", "testing-bar", "Colour testing bar", 2.2, -0.2, FACE_LEFT],
-  ["wall-left-1", "wall-display", SKIN_WALL, LEFT_WALL, 4.5, FACE_RIGHT],
-  ["wall-left-2", "wall-display", BODY_WALL, LEFT_WALL, 2.65, FACE_RIGHT],
-  ["wall-left-3", "wall-display", SKIN_WALL, LEFT_WALL, 0.8, FACE_RIGHT],
-  ["wall-left-4", "wall-display", HAIR_WALL, LEFT_WALL, -1.05, FACE_RIGHT],
-  ["wall-right-1", "wall-display", COLOUR_WALL, RIGHT_WALL, 4.5, FACE_LEFT],
-  ["wall-right-2", "wall-display", COLOUR_WALL, RIGHT_WALL, 2.65, FACE_LEFT],
-  ["wall-right-3", "wall-display", SCENT_WALL, RIGHT_WALL, 0.8, FACE_LEFT],
-  ["wall-right-4", "wall-display", SCENT_WALL, RIGHT_WALL, -1.05, FACE_LEFT],
-  ["wall-front-left", "wall-display", GIFT_WALL, -2.9, 5.75, FACE_BACK],
-  ["wall-front-right", "wall-display", GIFT_WALL, 2.9, 5.75, FACE_BACK],
-  ["wall-back", "wall-display", SCENT_WALL, 3, -5.75],
-  ["checkout", "checkout-counter", "Checkout counter", 0, -4.4],
-  ["backbar-1", "shelf", "Back-bar shelf", -0.6, -5.78],
-  ["backbar-2", "shelf", "Back-bar shelf", 0.6, -5.78],
-  ["consult-a", "consultation-station", "Consultation vanity A", -3.4, -5.62],
-  ["seat-a", "chair", "Consultation chair A", -3.4, -4.75, FACE_BACK],
-  ["consult-b", "consultation-station", "Consultation vanity B", -4.12, -3, FACE_RIGHT],
-  ["seat-b", "chair", "Consultation chair B", -3.25, -3, FACE_LEFT],
-  ["bench", "lounge-bench", "Lounge bench", 4.08, -3.05, FACE_LEFT],
-  ["plant-front", "plant", "Entrance plant", -4.1, 5.65],
-  ["plant-lounge", "plant", "Lounge plant", 4.15, -5.65],
-];
-const DISCOVERY_JOURNEY: RetailPlacement[] = [
-  ["hero", "hero-plinth", "Arrival hero plinth", 1, 3.4],
-  ["table-new", "display-table", "New arrivals table", -1.95, 4.4],
-  ["wall-front-left", "wall-display", SKIN_WALL, -3.5, 1.9],
-  ["wall-front-right", "wall-display", BODY_WALL, -1.65, 1.9],
-  ["bar-skin", "testing-bar", "Skin testing bar", 0.6, -1.2],
-  ["bar-colour", "testing-bar", "Colour testing bar", 3.05, -1.2],
-  ["wall-left-1", "wall-display", GIFT_WALL, LEFT_WALL, 4.5, FACE_RIGHT],
-  ["wall-left-3", "wall-display", HAIR_WALL, LEFT_WALL, 0.5, FACE_RIGHT],
-  ["wall-left-4", "wall-display", SKIN_WALL, LEFT_WALL, -1.35, FACE_RIGHT],
-  ["wall-right-1", "wall-display", SCENT_WALL, RIGHT_WALL, 5, FACE_LEFT],
-  ["wall-right-2", "wall-display", SCENT_WALL, RIGHT_WALL, 3.2, FACE_LEFT],
-  ["wall-right-3", "wall-display", COLOUR_WALL, RIGHT_WALL, 1.4, FACE_LEFT],
-  ["wall-back", "wall-display", COLOUR_WALL, 3, -5.75],
-  ["checkout", "checkout-counter", "Checkout counter", 0.6, -4.4],
-  ["backbar-1", "shelf", "Back-bar shelf", 0, -5.78],
-  ["backbar-2", "shelf", "Back-bar shelf", 1.2, -5.78],
-  ["consult-a", "consultation-station", "Consultation vanity A", -3.4, -5.62],
-  ["seat-a", "chair", "Consultation chair A", -3.4, -4.75, FACE_BACK],
-  ["consult-b", "consultation-station", "Consultation vanity B", -4.12, -3.3, FACE_RIGHT],
-  ["seat-b", "chair", "Consultation chair B", -3.25, -3.3, FACE_LEFT],
-  ["bench", "lounge-bench", "Lounge bench", 4.08, -3.05, FACE_LEFT],
-  ["plant-front", "plant", "Entrance plant", -4.1, 5.65],
-  ["plant-lounge", "plant", "Lounge plant", 4.15, -5.65],
-];
-const OPEN_EVENT: RetailPlacement[] = [
-  ["hero", "hero-plinth", "Arrival hero plinth", -3.6, 5.1],
-  ["table-new", "display-table", "New arrivals table", -2, 5.2],
-  ["bar-skin", "testing-bar", "Skin testing bar", 2.75, 5.6, FACE_BACK],
-  ["bar-colour", "testing-bar", "Colour testing bar", 4.05, -2.7, FACE_LEFT],
-  ["wall-left-2", "wall-display", BODY_WALL, LEFT_WALL, 2.3, FACE_RIGHT],
-  ["wall-left-3", "wall-display", SKIN_WALL, LEFT_WALL, 0.48, FACE_RIGHT],
-  ["wall-left-4", "wall-display", HAIR_WALL, LEFT_WALL, -1.34, FACE_RIGHT],
-  ["wall-left-5", "wall-display", GIFT_WALL, LEFT_WALL, -3.16, FACE_RIGHT],
-  ["wall-right-1", "wall-display", COLOUR_WALL, RIGHT_WALL, 3.1, FACE_LEFT],
-  ["wall-right-2", "wall-display", COLOUR_WALL, RIGHT_WALL, 1.25, FACE_LEFT],
-  ["wall-right-3", "wall-display", SCENT_WALL, RIGHT_WALL, -0.6, FACE_LEFT],
-  ["checkout", "checkout-counter", "Checkout counter", 0.9, -4.9],
-  ["consult-a", "consultation-station", "Consultation vanity A", -3.65, -5.62],
-  ["seat-a", "chair", "Consultation chair A", -3.65, -4.85, FACE_BACK],
-  ["consult-b", "consultation-station", "Consultation vanity B", -1.9, -5.62],
-  ["seat-b", "chair", "Consultation chair B", -1.9, -4.85, FACE_BACK],
-  ["bench", "lounge-bench", "Lounge bench", 3.45, -5.6],
-];
-/** Every preset shares item IDs so switching layouts animates the same pieces across the floor. */
+  BODY_WALL = "Body care wall";
+/** Every preset places the same pieces, so switching layouts animates each one across the floor. */
+const FLAGSHIP_PIECES: Record<string, [ItemKind, string]> = {
+  hero: ["hero-plinth", "Arrival hero plinth"],
+  "hero-l": ["hero-plinth", "Doorway plinth left"],
+  "hero-r": ["hero-plinth", "Doorway plinth right"],
+  "screen-arrival": ["digital-wall", "Arrival digital wall"],
+  "table-new": ["display-table", "New arrivals table"],
+  "table-edit": ["display-table", "Editor's picks table"],
+  "table-1": ["display-table", "Discovery table A"],
+  "table-2": ["display-table", "Discovery table B"],
+  "ft-1": ["fragrance-tower", "Fragrance tower 1"],
+  "ft-2": ["fragrance-tower", "Fragrance tower 2"],
+  "ft-3": ["fragrance-tower", "Fragrance tower 3"],
+  "ft-4": ["fragrance-tower", "Fragrance tower 4"],
+  "ft-5": ["fragrance-tower", "Fragrance tower 5"],
+  "ft-6": ["fragrance-tower", "Fragrance tower 6"],
+  "ft-7": ["fragrance-tower", "Fragrance tower 7"],
+  "ft-8": ["fragrance-tower", "Fragrance tower 8"],
+  "ft-9": ["fragrance-tower", "Fragrance tower 9"],
+  "wall-left-0": ["wall-display", BODY_WALL],
+  "wall-left-1": ["wall-display", SCENT_WALL],
+  "wall-left-2": ["wall-display", SCENT_WALL],
+  "wall-left-3": ["wall-display", SKIN_WALL],
+  "wall-left-4": ["wall-display", SKIN_WALL],
+  "wall-right-1": ["wall-display", COLOUR_WALL],
+  "wall-right-2": ["wall-display", COLOUR_WALL],
+  "wall-right-3": ["wall-display", HAIR_WALL],
+  "sa-1": ["skin-analyzer", "Skin analyzer 1"],
+  "sa-2": ["skin-analyzer", "Skin analyzer 2"],
+  "sa-3": ["skin-analyzer", "Skin analyzer 3"],
+  "bar-skin": ["testing-bar", "Skin testing bar"],
+  "consult-a": ["consultation-station", "Consultation vanity A"],
+  "consult-b": ["consultation-station", "Consultation vanity B"],
+  "seat-a": ["chair", "Consultation chair A"],
+  "seat-b": ["chair", "Consultation chair B"],
+  "bar-colour": ["testing-bar", "Colour testing bar"],
+  "bar-colour-2": ["testing-bar", "Lip and cheek testing bar"],
+  "ms-1": ["mirror-station", "Mirror station 1"],
+  "ms-2": ["mirror-station", "Mirror station 2"],
+  "ms-3": ["mirror-station", "Mirror station 3"],
+  "ms-4": ["mirror-station", "Mirror station 4"],
+  "bc-1": ["beauty-chair", "Beauty chair 1"],
+  "bc-2": ["beauty-chair", "Beauty chair 2"],
+  "bc-3": ["beauty-chair", "Beauty chair 3"],
+  "bc-4": ["beauty-chair", "Beauty chair 4"],
+  "cabin-1": ["service-cabin", "Facial cabin 1"],
+  "cabin-2": ["service-cabin", "Facial cabin 2"],
+  "cabin-3": ["service-cabin", "Brow and lash cabin"],
+  "cabin-4": ["service-cabin", "Makeover cabin"],
+  "screen-back": ["digital-wall", "Feature digital wall"],
+  gift: ["gift-station", "Gift wrapping station"],
+  "gift-2": ["gift-station", "Gift set station"],
+  checkout: ["checkout-counter", "Checkout counter"],
+  "backbar-1": ["shelf", "Back-bar shelf"],
+  "backbar-2": ["shelf", "Back-bar shelf"],
+  bench: ["lounge-bench", "Lounge bench A"],
+  "bench-2": ["lounge-bench", "Lounge bench B"],
+  "bench-3": ["lounge-bench", "Lounge bench C"],
+  "plant-front": ["plant", "Entrance plant"],
+  "plant-door-l": ["plant", "Doorway plant left"],
+  "plant-door-r": ["plant", "Doorway plant right"],
+  "plant-lounge": ["plant", "Lounge plant"],
+  "plant-back-l": ["plant", "Back wall plant left"],
+  "plant-back-r": ["plant", "Back wall plant right"],
+};
+type Wall = "left" | "right" | "back" | "front";
+/** A free-standing piece at x, z, or a piece against a wall at a distance along it. */
+type Placement = [x: number, z: number, rotation?: number] | [wall: Wall, along: number];
+function place(id: string, spot: Placement): [number, number, number] {
+  if (typeof spot[0] === "number") return [spot[0], spot[1], spot[2] ?? FACE_ENTRANCE];
+  const inset = DEFAULTS[FLAGSHIP_PIECES[id][0]].dimensions.depth / 2 + WALL_GAP,
+    along = spot[1],
+    x = FLAGSHIP.width / 2 - inset,
+    z = FLAGSHIP.depth / 2 - inset;
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  if (spot[0] === "left") return [round(-x), along, FACE_RIGHT];
+  if (spot[0] === "right") return [round(x), along, FACE_LEFT];
+  if (spot[0] === "front") return [along, round(z), FACE_BACK];
+  return [along, round(-z), FACE_ENTRANCE];
+}
+/**
+ * The build keeps one finish in every layout: cabins, wall units, mirror stations, the checkout and seating.
+ * Layout finishes go on the pieces that move, so a walkthrough shows moves rather than a repaint of every fixture.
+ */
+const STORE_FINISHES: Partial<Record<ItemKind, string>> = { chair: "#b39a8e" };
 function retailLayout(
   details: Pick<Layout, "id" | "name" | "description" | "wallColor" | "accentColor">,
-  placements: RetailPlacement[],
+  spots: Record<string, Placement>,
   finishes: Partial<Record<ItemKind, string>> = {},
 ): Layout {
   return {
     ...details,
-    items: placements.map(([id, kind, name, x, z, rotation = FACE_ENTRANCE]) => ({
-      ...createFurnitureItem(kind),
-      id,
-      name,
-      position: { x, z },
-      rotation,
-      ...(finishes[kind] ? { color: finishes[kind] } : {}),
-    })),
+    items: Object.entries(spots).map(([id, spot]) => {
+      const [kind, name] = FLAGSHIP_PIECES[id],
+        [x, z, rotation] = place(id, spot);
+      return {
+        ...createFurnitureItem(kind),
+        id,
+        name,
+        ...(PRESET_SIZES[id] ? { dimensions: { ...PRESET_SIZES[id] } } : {}),
+        position: { x, z },
+        rotation,
+        ...(finishes[kind] ?? STORE_FINISHES[kind] ? { color: finishes[kind] ?? STORE_FINISHES[kind] } : {}),
+      };
+    }),
   };
 }
+/** The fixed build: treatment cabins and the feature screen on the back wall. */
+const BACK_BUILD: Record<string, Placement> = {
+  "cabin-1": ["back", -8.55],
+  "cabin-2": ["back", -5.75],
+  "cabin-3": ["back", 5.75],
+  "cabin-4": ["back", 8.55],
+  "screen-back": ["back", 0],
+  "plant-back-l": [-3.4, -13.4],
+  "plant-back-r": [3.4, -13.4],
+};
+/** Mirror stations and their chairs along the right wall, the makeup studio's working edge. */
+const MAKEUP_WALL: Record<string, Placement> = {
+  "ms-1": ["right", -8.4],
+  "ms-2": ["right", -7.1],
+  "ms-3": ["right", -5.8],
+  "ms-4": ["right", -4.5],
+  "bc-1": [9.1, -8.4, FACE_RIGHT],
+  "bc-2": [9.1, -7.1, FACE_RIGHT],
+  "bc-3": [9.1, -5.8, FACE_RIGHT],
+  "bc-4": [9.1, -4.5, FACE_RIGHT],
+};
+/** Checkout against the right wall near the exit, with its back-bar shelves behind the staff aisle. */
+const CHECKOUT_WALL: Record<string, Placement> = {
+  checkout: [8.4, 9.4, FACE_LEFT],
+  "backbar-1": ["right", 9.2],
+  "backbar-2": ["right", 10],
+  "wall-right-3": ["right", 12.95],
+};
+const SKIN_CORNER: Record<string, Placement> = {
+  "bar-skin": [-5.4, -5.4],
+  "sa-1": [-7.4, -8.9],
+  "sa-2": [-6.5, -8.9],
+  "sa-3": [-5.6, -8.9],
+  "consult-a": [-3.2, -8.875],
+  "consult-b": [-1.5, -8.875],
+  "seat-a": [-3.2, -8.19, FACE_BACK],
+  "seat-b": [-1.5, -8.19, FACE_BACK],
+};
+const GRAND_FLAGSHIP: Record<string, Placement> = {
+  // Arrival: a large hero plinth on the axis, a pair at the doors and the digital wall on the left.
+  hero: [0, 7],
+  "hero-l": [-3.4, 11.2],
+  "hero-r": [3.4, 11.2],
+  "table-new": [-3.6, 6.8],
+  "table-edit": [3.6, 6.8],
+  "screen-arrival": ["left", 8.4],
+  "wall-left-0": ["left", 12.95],
+  "plant-front": [-9.4, 11.4],
+  "plant-door-l": [-2.6, 13.3],
+  "plant-door-r": [2.6, 13.3],
+  // Fragrance hall: a three by three grid of towers before the fragrance walls.
+  "ft-1": [-7.6, 2.6],
+  "ft-2": [-5.4, 2.6],
+  "ft-3": [-3.2, 2.6],
+  "ft-4": [-7.6, 0.2],
+  "ft-5": [-5.4, 0.2],
+  "ft-6": [-3.2, 0.2],
+  "ft-7": [-7.6, -2.2],
+  "ft-8": [-5.4, -2.2],
+  "ft-9": [-3.2, -2.2],
+  "wall-left-1": ["left", 2.2],
+  "wall-left-2": ["left", 0.3],
+  // Discovery spine down the centre to the feature screen.
+  "table-1": [0, 2.6, FACE_RIGHT],
+  "table-2": [0, -1.2, FACE_RIGHT],
+  // Skin diagnostics.
+  "wall-left-3": ["left", -3.8],
+  "wall-left-4": ["left", -5.7],
+  ...SKIN_CORNER,
+  // Makeup studio.
+  "bar-colour": [4.6, -8.6],
+  "bar-colour-2": [4.6, -5],
+  ...MAKEUP_WALL,
+  "wall-right-1": ["right", -1.6],
+  "wall-right-2": ["right", 0.3],
+  // Lounge.
+  bench: [5.6, -0.4],
+  "bench-2": [5.6, 3.2, FACE_BACK],
+  "bench-3": [3, 1.4, FACE_RIGHT],
+  "plant-lounge": [5.6, 1.4],
+  // Gifting and checkout.
+  gift: ["right", 4.8],
+  "gift-2": [6.6, 6.4],
+  ...CHECKOUT_WALL,
+  ...BACK_BUILD,
+};
+const DISCOVERY_JOURNEY: Record<string, Placement> = {
+  // A runway of tables leads from the hero plinth to a pair of back-to-back testing bars.
+  hero: [0, 8],
+  "hero-l": [-3.4, 11.2],
+  "hero-r": [3.4, 11.2],
+  "table-new": [0, 5.2, FACE_RIGHT],
+  "table-edit": [0, 3.4, FACE_RIGHT],
+  "table-1": [0, 1.6, FACE_RIGHT],
+  "table-2": [0, -0.2, FACE_RIGHT],
+  "bar-skin": [-0.425, -3.5, FACE_LEFT],
+  "bar-colour": [0.425, -3.5, FACE_RIGHT],
+  // A staggered avenue of fragrance towers turns visitors left, then back.
+  "ft-1": [-3.6, 6.4],
+  "ft-2": [-3.6, 3.8],
+  "ft-3": [-3.6, 1.2],
+  "ft-4": [-3.6, -1.4],
+  "ft-5": [-3.6, -4],
+  "ft-6": [-6.4, 5.1],
+  "ft-7": [-6.4, 2.5],
+  "ft-8": [-6.4, -0.1],
+  "ft-9": [-6.4, -2.7],
+  "screen-arrival": ["left", 9.4],
+  "wall-left-0": ["left", 13.05],
+  "plant-front": [-9.4, 6.2],
+  "wall-left-1": ["left", 4.6],
+  "wall-left-2": ["left", 2.7],
+  "wall-left-3": ["left", 0.8],
+  "wall-left-4": ["left", -1.1],
+  // Diagnostics along the left wall, consultation by the cabins.
+  "sa-1": ["left", -4.4],
+  "sa-2": ["left", -5.3],
+  "sa-3": ["left", -6.2],
+  "consult-a": [-5.6, -9],
+  "consult-b": [-3.9, -9],
+  "seat-a": [-5.6, -8.29, FACE_BACK],
+  "seat-b": [-3.9, -8.29, FACE_BACK],
+  ...BACK_BUILD,
+  // Back down the right: makeup, a pause in the lounge, then gifts and the checkout by the door.
+  "bar-colour-2": [5, -8.6],
+  ...MAKEUP_WALL,
+  "wall-right-1": ["right", -1.6],
+  "wall-right-2": ["right", 0.3],
+  bench: [3.6, 1.4, FACE_RIGHT],
+  "bench-2": [6.8, 1.4, FACE_LEFT],
+  "bench-3": [5.2, -1.2],
+  "plant-lounge": [5.2, 1.4],
+  gift: ["right", 5],
+  "gift-2": [6, 6.6],
+  ...CHECKOUT_WALL,
+  "plant-door-l": [-2.6, 13.3],
+  "plant-door-r": [2.6, 13.3],
+};
+const OPEN_EVENT: Record<string, Placement> = {
+  // A stage of three plinths before the feature screen, with benches either side.
+  ...BACK_BUILD,
+  hero: [0, -11.6],
+  "hero-l": [-2.7, -11.8],
+  "hero-r": [2.7, -11.8],
+  bench: [-4.6, -8.6, FACE_RIGHT],
+  "bench-2": [4.6, -8.6, FACE_LEFT],
+  "bench-3": [0, -9.2, FACE_BACK],
+  // Left band: walls, then a single file of towers.
+  "wall-left-0": ["left", 12.95],
+  "screen-arrival": ["left", 9.2],
+  "wall-left-1": ["left", 5.7],
+  "wall-left-2": ["left", 3.8],
+  "wall-left-3": ["left", 1.9],
+  "wall-left-4": ["left", 0],
+  "sa-1": ["left", -2.6],
+  "sa-2": ["left", -3.5],
+  "sa-3": ["left", -4.4],
+  "consult-a": ["left", -6.9],
+  "consult-b": ["left", -8.6],
+  "seat-a": [-8.94, -6.9, FACE_LEFT],
+  "seat-b": [-8.94, -8.6, FACE_LEFT],
+  "ft-1": [-7.2, 4.6],
+  "ft-2": [-7.2, 2.2],
+  "ft-3": [-7.2, -0.2],
+  "ft-4": [-7.2, -2.6],
+  "ft-5": [-7.2, -5],
+  "bar-skin": [-7.2, -8.4, FACE_RIGHT],
+  // Right band.
+  ...MAKEUP_WALL,
+  "wall-right-1": ["right", -1.6],
+  "wall-right-2": ["right", 0.3],
+  "bar-colour": [7.2, -0.65, FACE_LEFT],
+  "bar-colour-2": [7, -7, FACE_LEFT],
+  "ft-6": [7.2, 2.4],
+  "ft-9": [7.2, 4.8],
+  gift: ["right", 4.8],
+  ...CHECKOUT_WALL,
+  // Front band beside the doors.
+  "table-new": [-5.6, 9.6],
+  "table-1": [-5.6, 12.6],
+  "table-edit": [5.6, 12.6],
+  "table-2": [5.6, 9.8],
+  "gift-2": [-5.6, 7.4],
+  "ft-7": [-3, 12.4],
+  "ft-8": [3, 12.4],
+  "plant-front": [-9.4, 7.8],
+  "plant-lounge": [9.4, 7.2],
+  "plant-door-l": [-2.6, 10.6],
+  "plant-door-r": [2.6, 10.6],
+};
+const LAUNCH_DAY: Record<string, Placement> = {
+  // The feature screen moves to the centre as a stage backdrop, the hero plinths in front of it.
+  "screen-back": [0, -1],
+  hero: [0, 1.4],
+  "hero-l": [-3.4, 1.4],
+  "hero-r": [3.4, 1.4],
+  // Audience benches face the stage, with a centre aisle from the door.
+  bench: [-2.4, 5, FACE_BACK],
+  "bench-2": [2.4, 5, FACE_BACK],
+  "bench-3": [-2.4, 7.2, FACE_BACK],
+  "plant-lounge": [2.4, 7.2],
+  // A ring of fragrance towers around the stage.
+  "ft-1": [-5.6, 4.6],
+  "ft-2": [-6.4, 2],
+  "ft-3": [-6.4, -0.6],
+  "ft-4": [-5.6, -3.2],
+  "ft-5": [5.6, 4.2],
+  "ft-6": [6.4, 2],
+  "ft-7": [6.4, -0.6],
+  "ft-8": [5.6, -3.2],
+  "ft-9": [-5.6, 7.2],
+  "table-new": [-4.6, 9.4],
+  "table-edit": [4.6, 9.4],
+  "table-1": [0, -11.8],
+  "table-2": [0, -6.6],
+  "screen-arrival": ["left", 8.4],
+  "wall-left-0": ["left", 12.95],
+  "plant-front": [-9.4, 11.4],
+  "wall-left-1": ["left", 2.2],
+  "wall-left-2": ["left", 0.3],
+  "wall-left-3": ["left", -3.8],
+  "wall-left-4": ["left", -5.7],
+  ...SKIN_CORNER,
+  "bar-colour": [4.6, -8.6],
+  "bar-colour-2": [4.6, -5.4],
+  ...MAKEUP_WALL,
+  "wall-right-1": ["right", -1.6],
+  "wall-right-2": ["right", 0.3],
+  gift: ["right", 4.8],
+  "gift-2": [6.6, 6.4],
+  ...CHECKOUT_WALL,
+  "cabin-1": ["back", -8.55],
+  "cabin-2": ["back", -5.75],
+  "cabin-3": ["back", 5.75],
+  "cabin-4": ["back", 8.55],
+  "plant-back-l": [-3.4, -13.4],
+  "plant-back-r": [3.4, -13.4],
+  "plant-door-l": [-2.6, 13.3],
+  "plant-door-r": [2.6, 13.3],
+};
+const SERVICES_FIRST: Record<string, Placement> = {
+  // Treatment cabins line the left wall from the door, so services are the first thing a visitor meets.
+  "cabin-1": ["left", 12.4],
+  "cabin-2": ["left", 9.6],
+  "cabin-3": ["left", 6.8],
+  "cabin-4": ["left", 4],
+  // A diagnostics bar and consultation facing the entrance.
+  "sa-1": [-4.5, 9.6],
+  "sa-2": [-3.6, 9.6],
+  "sa-3": [-2.7, 9.6],
+  "consult-a": [-4.1, 5.6],
+  "consult-b": [-2.4, 5.6],
+  "seat-a": [-4.1, 6.29, FACE_BACK],
+  "seat-b": [-2.4, 6.29, FACE_BACK],
+  // The makeup studio on the right, by the door.
+  "ms-1": ["right", 10.2],
+  "ms-2": ["right", 8.9],
+  "ms-3": ["right", 7.6],
+  "ms-4": ["right", 6.3],
+  "bc-1": [9.1, 10.2, FACE_RIGHT],
+  "bc-2": [9.1, 8.9, FACE_RIGHT],
+  "bc-3": [9.1, 7.6, FACE_RIGHT],
+  "bc-4": [9.1, 6.3, FACE_RIGHT],
+  "bar-colour": [4.4, 9.4],
+  "bar-colour-2": [4.4, 6],
+  "wall-right-3": ["right", 12.95],
+  hero: [0, 1.6],
+  "plant-door-l": [-2.6, 13.3],
+  "plant-door-r": [2.6, 13.3],
+  // Products and the hall behind: fragrance, skin walls, the lounge, then gifts and checkout.
+  "screen-arrival": ["left", -2],
+  "wall-left-0": ["left", 1.4],
+  "wall-left-1": ["left", -5.6],
+  "wall-left-2": ["left", -7.5],
+  "wall-left-3": ["left", -9.4],
+  "wall-left-4": ["left", -11.3],
+  "ft-1": [-6.8, -2.4],
+  "ft-2": [-4.6, -2.4],
+  "ft-3": [-2.4, -2.4],
+  "ft-4": [-6.8, -4.8],
+  "ft-5": [-4.6, -4.8],
+  "ft-6": [-2.4, -4.8],
+  "ft-7": [-6.8, -7.2],
+  "ft-8": [-4.6, -7.2],
+  "ft-9": [-2.4, -7.2],
+  "bar-skin": [-4.6, -10.6],
+  "hero-l": [-3, 1.6],
+  "hero-r": [3, 3.8],
+  "table-new": [0, -2.4, FACE_RIGHT],
+  "table-1": [0, -5.8, FACE_RIGHT],
+  "table-edit": [0, -9.2, FACE_RIGHT],
+  "table-2": [0, -12.4],
+  "screen-back": ["back", 4.8],
+  "wall-right-1": ["right", 1.6],
+  "wall-right-2": ["right", 3.5],
+  bench: [5.6, -1.4],
+  "bench-2": [5.6, 2.2, FACE_BACK],
+  "bench-3": [3, 0.4, FACE_RIGHT],
+  "plant-lounge": [5.6, 0.4],
+  gift: ["right", -5.4],
+  "gift-2": [5.8, -6.6],
+  checkout: [8.4, -9.8, FACE_LEFT],
+  "backbar-1": ["right", -10.2],
+  "backbar-2": ["right", -9.4],
+  "plant-front": [-9.4, -13.4],
+  "plant-back-l": [-3.4, -13.4],
+  "plant-back-r": [9.4, -13.4],
+};
+/** Larger than the catalogue piece: the arrival plinth is the store's centrepiece. */
+const PRESET_SIZES: Partial<Record<string, Dimensions>> = {
+  hero: { width: 1.5, depth: 1.5, height: 2.1 },
+};
 export function createRetailProject(): Project {
   const room: RoomSpec = {
-    width: 9,
-    depth: 12,
-    height: 3.6,
-    door: { wall: "front", offset: 0, width: 2.2, height: 2.7 },
+    ...FLAGSHIP,
+    door: { wall: "front", offset: 0, width: 4, height: 3.2 },
   };
   return {
     name: "Experiential store",
@@ -370,34 +731,32 @@ export function createRetailProject(): Project {
       retailLayout(
         {
           id: "original",
-          name: "Classic boutique",
+          name: "Grand flagship",
           description:
-            "A calm, symmetrical flagship: a hero plinth on arrival, twin testing bars, lined walls, then consultation and lounge corners before checkout",
-          wallColor: "#efe4d8",
-          accentColor: "#b98474",
+            "Seven clear zones: a hero arrival with a digital wall, a fragrance hall, skin diagnostics, a makeup studio, treatment cabins, a lounge, and gifting by the checkout",
+          wallColor: "#efe6dc",
+          accentColor: "#b5806f",
         },
-        CLASSIC_BOUTIQUE,
-        { chair: "#b39a8e" },
+        GRAND_FLAGSHIP,
       ),
       retailLayout(
         {
           id: "discovery-journey",
           name: "Discovery journey",
           description:
-            "A guided path: display runs turn visitors from the hero plinth across the testing bars, past consultation and on to checkout",
-          wallColor: "#dfe3d8",
+            "A guided loop: a runway of tables and an avenue of fragrance towers lead left, through diagnostics and the cabins, then back past makeup and the lounge to the checkout",
+          wallColor: "#dfe4d9",
           accentColor: "#5f7f6f",
         },
         DISCOVERY_JOURNEY,
         {
           "testing-bar": "#8fa796",
           "hero-plinth": "#6f8f7f",
-          "wall-display": "#e9ebe2",
-          "consultation-station": "#dfe3d8",
           "display-table": "#c6cfc2",
           "lounge-bench": "#5f7f6f",
-          "checkout-counter": "#3f4a45",
-          chair: "#8c9c90",
+          "fragrance-tower": "#c9d2c0",
+          "digital-wall": "#7fa48f",
+          "gift-station": "#a9bba9",
         },
       ),
       retailLayout(
@@ -405,7 +764,7 @@ export function createRetailProject(): Project {
           id: "open-event",
           name: "Open event",
           description:
-            "Everything pulled back to the walls, leaving one large central floor for launches, masterclasses and community events",
+            "Everything pulled back to the walls around a stage before the feature screen, leaving one large central floor for launches, masterclasses and community events",
           wallColor: "#ebe7ee",
           accentColor: "#4b4560",
         },
@@ -413,12 +772,51 @@ export function createRetailProject(): Project {
         {
           "testing-bar": "#8a80a3",
           "hero-plinth": "#5a5275",
-          "wall-display": "#eeeaf1",
-          "consultation-station": "#e2dde8",
           "display-table": "#cfc8d8",
           "lounge-bench": "#4b4560",
-          "checkout-counter": "#332f3f",
-          chair: "#8f86a0",
+          "fragrance-tower": "#cfc6dc",
+          "digital-wall": "#8a7fd0",
+          "gift-station": "#a79cc0",
+        },
+      ),
+      retailLayout(
+        {
+          id: "launch-day",
+          name: "Launch day",
+          description:
+            "A centre-stage reveal: the feature screen and hero plinths stand in the middle of the store, ringed by fragrance towers, with audience benches facing them",
+          wallColor: "#ece4e2",
+          accentColor: "#7a2f3d",
+        },
+        LAUNCH_DAY,
+        {
+          "testing-bar": "#a35a63",
+          "hero-plinth": "#7a2f3d",
+          "display-table": "#d9c3bf",
+          "lounge-bench": "#7a2f3d",
+          "fragrance-tower": "#c9a46a",
+          "digital-wall": "#d0506a",
+          "gift-station": "#b98a5a",
+        },
+      ),
+      retailLayout(
+        {
+          id: "services-first",
+          name: "Services first",
+          description:
+            "Appointments up front: treatment cabins, skin analyzers, consultation and the makeup studio meet visitors at the door, with fragrance, products and the checkout behind",
+          wallColor: "#e3ebea",
+          accentColor: "#4f7c7a",
+        },
+        SERVICES_FIRST,
+        {
+          "testing-bar": "#86aeab",
+          "hero-plinth": "#4f7c7a",
+          "display-table": "#c4d6d3",
+          "lounge-bench": "#4f7c7a",
+          "fragrance-tower": "#d6dfdc",
+          "digital-wall": "#5fa8a2",
+          "gift-station": "#9fbdb9",
         },
       ),
     ],
@@ -539,19 +937,30 @@ const ACCESS_CLEARANCE: Partial<Record<ItemKind, number>> = {
   "checkout-counter": 1.5,
   "consultation-station": 1,
   "display-table": 1,
+  "skin-analyzer": 1,
+  "mirror-station": 1,
+  "gift-station": 1.2,
+  // A treatment room is entered from its door side, so that side keeps a clear approach.
+  "service-cabin": 1.2,
+  // Shoppers circle a fragrance tower, so its access space runs all the way round.
+  "fragrance-tower": 0.9,
 };
+/** Pieces browsed from every side rather than from a front. */
+const ALL_ROUND: ItemKind[] = ["fragrance-tower"];
 /** Seats belong in the access space of what they serve. */
 const SEATED_AT: Partial<Record<ItemKind, ItemKind[]>> = {
   desk: ["chair"],
   "consultation-station": ["chair", "stool"],
+  "mirror-station": ["beauty-chair", "chair", "stool"],
 };
 export function usageFootprint(item: FurnitureItem): Position[] | null {
   const clearance = ACCESS_CLEARANCE[item.kind];
   if (clearance === undefined) return null;
-  const w = item.dimensions.width / 2,
+  const round = ALL_ROUND.includes(item.kind),
+    w = item.dimensions.width / 2 + (round ? clearance : 0),
     start = item.dimensions.depth / 2,
     // Display tables stand free and are browsed from both long sides.
-    near = item.kind === "display-table" ? -start - clearance : start;
+    near = item.kind === "display-table" || round ? -start - clearance : start;
   return [
     { x: -w, z: near },
     { x: w, z: near },
@@ -809,7 +1218,7 @@ function readProject(raw: unknown): Project {
     door: {
       wall: "front",
       offset: number(d.offset, "Door offset", -15, 15),
-      width: number(d.width, "Door width", 0.6, 3),
+      width: number(d.width, "Door width", 0.6, 6),
       height: number(d.height, "Door height", 1.5, 4),
     },
   };
