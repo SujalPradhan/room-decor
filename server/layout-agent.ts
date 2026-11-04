@@ -73,9 +73,11 @@ function readSituation(value: unknown): AgentSituation {
   };
 }
 /** Lower-cased names a check may mention: the pieces in the situation and the catalogue name of each kind it may add. */
-const KIND_NAMES = new Map(KINDS.map(kind => [kind, createFurnitureItem(kind).name]));
+// Built on first use: createFurnitureItem draws a random id, which Workers forbid at module load.
+let kindNames: Map<string, string> | undefined;
+const kindName = (kind: string) => (kindNames ??= new Map(KINDS.map(each => [each, createFurnitureItem(each).name]))).get(kind)!;
 function namesOf(situation: AgentSituation): Set<string> {
-  return new Set([...situation.furniture.map(piece => piece.name), ...situation.catalogueKinds.map(kind => KIND_NAMES.get(kind)!)].map(name => name.toLowerCase()));
+  return new Set([...situation.furniture.map(piece => piece.name), ...situation.catalogueKinds.map(kindName)].map(name => name.toLowerCase()));
 }
 /** True when some split of text at sep leaves a known name on both sides. */
 function twoNames(text: string, sep: string, known: Set<string>): boolean {
