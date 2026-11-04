@@ -101,6 +101,14 @@ import {
 } from "./measurements";
 
 const STORAGE_KEY = "roomshift-project-v1";
+const PANELS_KEY = "roomshift-panels-v1";
+interface PanelState { leftCollapsed: boolean; layoutsCollapsed: boolean }
+function savedPanels(): PanelState {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PANELS_KEY) ?? "{}") as Partial<PanelState>;
+    return { leftCollapsed: saved.leftCollapsed === true, layoutsCollapsed: saved.layoutsCollapsed === true };
+  } catch { return { leftCollapsed: false, layoutsCollapsed: false }; }
+}
 /** v2 is the 20 × 28 m flagship; a saved 9 × 12 m store under v1 is left where it is. */
 const STORE_STORAGE_KEY = "roomshift-store-project-v2";
 const SPACE_KEY = "roomshift-space-v1";
@@ -113,6 +121,7 @@ const spaces = [
   { id: "retail", label: "Store", Icon: Store },
 ] as const;
 import { DoorClosed, Gift, MonitorPlay, ScanFace, Sparkles, SprayCan } from "lucide-react";
+import { ChevronUp, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 const kindIcons: Record<ItemKind, LucideIcon> = {
   bed: BedDouble,
   wardrobe: PanelTop,
@@ -340,6 +349,8 @@ export default function App() {
   const [productOpen, setProductOpen] = useState(false), [costOpen, setCostOpen] = useState(false);
   const [productTarget, setProductTarget] = useState<FurnitureItem | null>(null), [initialProductId, setInitialProductId] = useState<string | undefined>();
   const [autoStartProduct,setAutoStartProduct]=useState(false);
+  const [panels,setPanels]=useState<PanelState>(savedPanels);
+  const togglePanel=(key:keyof PanelState)=>setPanels(current=>{const next={...current,[key]:!current[key]};try{localStorage.setItem(PANELS_KEY,JSON.stringify(next));}catch{/* The choice still holds for this visit. */}return next;});
   const [placementTick,setPlacementTick]=useState(0);
   const sourceVersion=useRef(0),activeProductRequest=useRef<AbortController|null>(null);
   const autoIntents=useRef(new Map<string,ProductPlacementIntent>()),placementScope=useRef(''),activeAutoIntent=useRef<string|null>(null),placing=useRef(new Set<string>()),placementRetries=useRef(new Map<string,number>()),pendingCancellation=useRef<Promise<unknown>>(Promise.resolve()),appAlive=useRef(true),placementTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());
@@ -1053,7 +1064,7 @@ export default function App() {
     ? issues.filter((i) => i.itemIds.includes(selected.id))
     : [];
   return (
-    <div className="app-shell laptop-studio">
+    <div className={`app-shell laptop-studio${panels.leftCollapsed?" left-collapsed":""}${panels.layoutsCollapsed?" layouts-collapsed":""}`}>
       <header className="topbar">
         <a className="brand" href="/" aria-label="Roomshift home">
           <Box size={26} strokeWidth={1.3} />
@@ -1138,6 +1149,10 @@ export default function App() {
           className={`inventory-panel ${mobilePanel === "items" ? "mobile-open" : ""}`}
           inert={presenting}
         >
+          <button className="panel-rail" type="button" aria-label={`Show ${pieces} panel`} aria-expanded={false} aria-controls="inventory-content" onClick={()=>togglePanel("leftCollapsed")}>
+            <PanelLeftOpen size={17}/><span>{activeCount.toString().padStart(2, "0")}</span>
+          </button>
+          <div className="panel-content" id="inventory-content">
           <div className="panel-heading">
             <div>
               <span className="eyebrow">MAKE IT YOURS</span>
@@ -1152,6 +1167,9 @@ export default function App() {
               onClick={() => setMobilePanel(null)}
             >
               <X size={18} />
+            </button>
+            <button className="panel-collapse icon-button subtle" type="button" aria-label={`Hide ${pieces} panel`} aria-expanded={true} aria-controls="inventory-content" onClick={()=>togglePanel("leftCollapsed")}>
+              <PanelLeftClose size={16}/>
             </button>
           </div>
           <div className="inventory-list">
@@ -1232,6 +1250,7 @@ export default function App() {
             >
               Your reference library <ArrowUpRight size={13} />
             </button>
+          </div>
           </div>
         </aside>
         <section
@@ -1864,12 +1883,19 @@ export default function App() {
         </aside>
       </main>
       <section className="layouts-section" aria-label="Saved layouts">
+        <button className="layouts-toggle icon-button subtle" type="button" aria-label={panels.layoutsCollapsed?"Show layout cards":"Hide layout cards"} aria-expanded={!panels.layoutsCollapsed} aria-controls="layout-cards" onClick={()=>togglePanel("layoutsCollapsed")}>
+          {panels.layoutsCollapsed?<ChevronUp size={16}/>:<ChevronDown size={16}/>}
+        </button>
+        {panels.layoutsCollapsed&&<div className="layout-pills" role="group" aria-label="Layouts">
+          <span className="eyebrow">LAYOUTS</span>
+          {project.layouts.map(l=><button key={l.id} type="button" className={l.id===layout.id?"active":""} aria-pressed={l.id===layout.id} disabled={presenting} onClick={()=>startPreset(l.id)}>{l.name}</button>)}
+        </div>}
         <div className="layouts-intro">
           <span className="eyebrow">SAME {place.toUpperCase()}, NEW POSSIBILITIES</span>
           <h2>Find your flow.</h2>
           <p>Choose a layout. Watch it come together.</p>
         </div>
-        <div className="layout-cards">
+        <div className="layout-cards" id="layout-cards">
           {project.layouts.map((l, index) => (
             <div className="layout-card-wrap" key={l.id}>
             <button
