@@ -1,4 +1,5 @@
 import { openFloorArea, spaceOfLayouts } from './layout-explainer';
+import { bestForGoal, goalOf } from './layout-goals';
 import type { Layout, RoomSpec, SpaceType } from './types';
 
 export interface LayoutIntentMatch { targetId?: string; reply: string }
@@ -44,8 +45,13 @@ export function matchLayoutIntent(prompt: string, layouts: Layout[], activeId: s
       if (themed) return choose(themed, 'Its description matches what you asked for.');
     }
   };
+  const byGoal = () => {
+    if (EDIT.test(request) && !SWITCH.test(request)) return;
+    const goal = goalOf(request, 'retail'), best = goal && bestForGoal(goal, layouts, room);
+    if (best) return choose(best.layout, best.reason);
+  };
   // "An event space" asks for the event layout in a store, so themes go first there.
-  const match = retail ? byTheme() ?? bySpace() : bySpace() ?? byTheme();
+  const match = retail ? byTheme() ?? byGoal() ?? bySpace() : bySpace() ?? byTheme();
   if (match) return match;
-  return { reply: `I can only switch between saved layouts: ${layouts.map(layout => layout.name).join(', ')}. ${retail ? 'Try asking for more space, for an event, or for a guided journey.' : 'Try asking for more space, or for a place to work.'}` };
+  return { reply: `I can only switch between saved layouts: ${layouts.map(layout => layout.name).join(', ')}. ${retail ? 'Try asking for more space, more sales, for an event, or for a guided journey.' : 'Try asking for more space, or for a place to work.'}` };
 }

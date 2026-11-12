@@ -457,3 +457,30 @@ test('every flagship layout renders as a stocked store', async ({ page }) => {
   }
   expect(errors).toEqual([]);
 });
+
+test('a sales request explains each change through sales measures, and each step opens its why in place', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.route('**/api/layout-agent', r => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"LAYOUT_AGENT_UNAVAILABLE","message":"Local only."}}' }));
+  await open(page, '/?space=retail', storeKey);
+  await page.getByRole('textbox', { name: 'Describe what you want from this store', exact: true }).fill('Improve sales');
+  await page.getByRole('button', { name: 'Rearrange the store', exact: true }).click();
+  await expect(page.locator('.lp-reply')).toContainText('on the way from the door to checkout');
+  const panel = page.locator('.layout-explainer');
+  await page.getByRole('button', { name: 'Pause layout walkthrough', exact: true }).click();
+  await expect(panel.locator('.le-goal')).toContainText('Toward more sales');
+  await expect(panel.locator('.le-goal')).toContainText('Displays on the way to checkout');
+  await expect(panel.locator('.le-current-step .le-why').filter({ hasText: 'For sales' })).toHaveCount(1);
+  const row = page.getByRole('button', { name: /^Go to step 3:/ });
+  await expect(row).toHaveAttribute('aria-expanded', 'false');
+  await row.click();
+  await expect(row).toHaveAttribute('aria-expanded', 'true');
+  const why = page.locator('#le-step-why-2');
+  await expect(why).toContainText('For sales');
+  await expect(why).toContainText('Measured');
+  await expect(page.locator('.le-step-tag')).toContainText('Step 3');
+  await panel.screenshot({ path: `${SHOTS}/sales-walkthrough.png` });
+  await row.click();
+  await expect(why).toHaveCount(0);
+  await expect(panel.locator('.le-notes')).toContainText('not a sales forecast');
+  expect(errors.filter(error => !error.includes('503'))).toEqual([]);
+});

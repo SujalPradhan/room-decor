@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {buildLayoutExplanation,sampleLayoutExplanation,type LayoutExplanationPlan,type LayoutExplanationStep} from './layout-explainer';
+import {goalOf} from './layout-goals';
 import type {Layout,RoomSpec,SpaceType} from './types';
 
 export interface LayoutWalkthroughView {plan:LayoutExplanationPlan;elapsedMs:number;stepIndex:number;playing:boolean;finished:boolean;speed:number;preparationMs:number;completed:boolean}
@@ -41,7 +42,7 @@ export function useLayoutWalkthrough(onFrame:(layout:Layout|null,itemId?:string)
  },[view?.playing,view?.plan.id]);
  useEffect(()=>()=>{current.current=null;},[]);
  return {view,current,
-  start(from:Layout,to:Layout,room:RoomSpec,request?:string,reasons?:Record<string,string>,byAgent=false,space?:SpaceType){const begin=performance.now(),built=buildLayoutExplanation(from,to,room,space),plan={...built,request,byAgent,steps:built.steps.map(step=>({...step,agentReason:agentReasonFor(step,reasons)}))},reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;current.current={from:structuredClone(from),to:structuredClone(to),plan,elapsedMs:reduced?plan.totalDurationMs:0,stepIndex:0,playing:!reduced,finished:false,speed:1,completed:false,preparationMs:performance.now()-begin};draw();publish();},
+  start(from:Layout,to:Layout,room:RoomSpec,request?:string,reasons?:Record<string,string>,byAgent=false,space?:SpaceType){const begin=performance.now(),built=buildLayoutExplanation(from,to,room,space,goalOf(request,space)),plan={...built,request,byAgent,steps:built.steps.map(step=>({...step,agentReason:agentReasonFor(step,reasons)}))},reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;current.current={from:structuredClone(from),to:structuredClone(to),plan,elapsedMs:reduced?plan.totalDurationMs:0,stepIndex:0,playing:!reduced,finished:false,speed:1,completed:false,preparationMs:performance.now()-begin};draw();publish();},
   close(){current.current=null;callbacks.current.onFrame(null);setView(null);},
   toggle(){const s=current.current;if(!s)return;if(s.finished){s.elapsedMs=0;s.finished=false;}s.playing=!s.playing;draw();publish();},
   replay(){const s=current.current;if(!s)return;s.elapsedMs=0;s.finished=false;s.playing=!window.matchMedia('(prefers-reduced-motion: reduce)').matches;draw();publish();},

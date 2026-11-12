@@ -1,5 +1,5 @@
-import { Check, ChevronLeft, ChevronRight, Pause, Play, RotateCcw, SkipForward, X } from 'lucide-react';
-import type { CSSProperties } from 'react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Pause, Play, RotateCcw, SkipForward, X } from 'lucide-react';
+import { useState, type CSSProperties } from 'react';
 import type { SpaceType } from './types';
 import type { LayoutExplanationPlan } from './layout-explainer';
 import './layout-explainer.css';
@@ -27,6 +27,14 @@ export interface LayoutExplainerPanelProps {
 function piecesLabel(step: LayoutExplanationPlan['steps'][number]): string {
   return step.kind !== 'finish' && step.parts && step.parts.length > 1 ? `${step.parts.length} pieces` : '';
 }
+type Step = LayoutExplanationPlan['steps'][number];
+function Reasons({plan,step}:{plan:LayoutExplanationPlan;step:Step}) {
+  return <>
+    {step.agentReason&&<p className="le-why"><strong>Agent</strong> {step.agentReason}</p>}
+    {plan.goal&&step.goalWhy&&<p className="le-why"><strong>{plan.goal.label}</strong> {step.goalWhy}</p>}
+    {step.why&&<p className="le-why"><strong>{step.agentReason||step.goalWhy?'Measured':'Why'}</strong> {step.why}</p>}
+  </>;
+}
 function seconds(ms: number): string {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
@@ -36,7 +44,9 @@ export default function LayoutExplainerPanel({plan,space,stepIndex,elapsedMs,pla
   const current=Math.max(0,Math.min(plan.steps.length-1,stepIndex));
   const step=plan.steps[current];
   const percent=total>0?Math.round(elapsed/total*100):finished?100:0;
-  const announcement=finished?'Layout ready. The walkthrough is complete.':step?`Step ${current+1} of ${plan.steps.length}${piecesLabel(step)?`, ${piecesLabel(step)} together`:''}. ${step.title}. ${step.description} ${step.agentReason??''} ${step.why??''}`:'No furniture moves to show.';
+  const [open,setOpen]=useState<{planId:string;ids:string[]}>({planId:plan.id,ids:[]}),opened=open.planId===plan.id?open.ids:[];
+  const toggle=(id:string)=>setOpen({planId:plan.id,ids:opened.includes(id)?opened.filter(item=>item!==id):[...opened,id]});
+  const announcement=finished?'Layout ready. The walkthrough is complete.':step?`Step ${current+1} of ${plan.steps.length}${piecesLabel(step)?`, ${piecesLabel(step)} together`:''}. ${step.title}. ${step.description} ${step.agentReason??''} ${step.goalWhy??''} ${step.why??''}`:'No furniture moves to show.';
   let offset=0;
   const offsets=plan.steps.map(item=>{const start=offset;offset+=Math.max(0,item.durationMs);return start;});
   return <section className="layout-explainer" aria-labelledby="layout-walkthrough-heading">
@@ -51,9 +61,8 @@ export default function LayoutExplainerPanel({plan,space,stepIndex,elapsedMs,pla
         <span className="le-step-tag">{finished?<><Check size={14}/> Complete</>:step?<>Step {current+1} <span>/ {plan.steps.length}</span></>:'Ready to switch'}</span>
         <h3>{finished?'Layout ready':step?.title??'No moves to show'}</h3>
         <p>{finished?'Your layout is in place. Replay the moves whenever you want a closer look.':step?.description??'This layout has no furniture movements to animate.'}</p>
-        {!finished&&step?.agentReason&&<p className="le-why"><strong>Agent</strong> {step.agentReason}</p>}
-        {!finished&&step?.why&&<p className="le-why"><strong>{step.agentReason?'Measured':'Why'}</strong> {step.why}</p>}
-        <p className="le-floor"><span>Largest open floor</span> <strong>{plan.startOpenFloor.toFixed(2)} → {plan.endOpenFloor.toFixed(2)} m²</strong></p>
+        {!finished&&step&&<Reasons plan={plan} step={step}/>}
+        {plan.goal?<div className="le-goal"><span className="le-goal-heading">{plan.goal.heading}</span>{plan.goal.lines.map(([label,value])=><p key={label} className="le-floor"><span>{label}</span> <strong>{value}</strong></p>)}</div>:<p className="le-floor"><span>Largest open floor</span> <strong>{plan.startOpenFloor.toFixed(2)} → {plan.endOpenFloor.toFixed(2)} m²</strong></p>}
       </div>
       {/* Only the text changes with a step or completion, never with animation frames. */}
       <span className="le-sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>
@@ -67,7 +76,7 @@ export default function LayoutExplainerPanel({plan,space,stepIndex,elapsedMs,pla
         </div>
         <div className="le-playback-options"><button className="le-text-button" type="button" onClick={onReplay} disabled={!plan.steps.length} aria-label="Restart layout walkthrough"><RotateCcw size={13}/> Replay</button><label className="le-speed">Speed<select value={speed} onChange={event=>onSpeed(Number(event.target.value))} aria-label="Walkthrough playback speed"><option value={0.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option></select></label></div>
       </div>
-      {plan.steps.length>0&&<ol className="le-step-list" aria-label="Layout changes">{plan.steps.map((item,index)=><li key={item.id??index}><button type="button" onClick={()=>onSeek(offsets[index])} className={index===current&&!finished?'is-current':''} aria-current={index===current&&!finished?'step':undefined} aria-label={`Go to step ${index+1}: ${item.title}${piecesLabel(item)?`, ${piecesLabel(item)}`:''}`}><span className={`le-step-number ${index<current||finished?'is-done':''}`}>{index<current||finished?<Check size={12}/>:index+1}</span><span className="le-step-title">{item.title}{piecesLabel(item)&&<small className="le-step-pieces">{piecesLabel(item)}</small>}</span><span className="le-step-duration">{seconds(item.durationMs)}</span></button></li>)}</ol>}
+      {plan.steps.length>0&&<ol className="le-step-list" aria-label="Layout changes">{plan.steps.map((item,index)=>{const expanded=opened.includes(item.id),reasons=Boolean(item.agentReason||item.goalWhy||item.why);return <li key={item.id??index}><button type="button" onClick={()=>{onSeek(offsets[index]);if(reasons)toggle(item.id);}} className={index===current&&!finished?'is-current':''} aria-current={index===current&&!finished?'step':undefined} aria-expanded={reasons?expanded:undefined} aria-controls={reasons?`le-step-why-${index}`:undefined} aria-label={`Go to step ${index+1}: ${item.title}${piecesLabel(item)?`, ${piecesLabel(item)}`:''}`}><span className={`le-step-number ${index<current||finished?'is-done':''}`}>{index<current||finished?<Check size={12}/>:index+1}</span><span className="le-step-title">{item.title}{piecesLabel(item)&&<small className="le-step-pieces">{piecesLabel(item)}</small>}</span><span className="le-step-duration">{seconds(item.durationMs)}</span>{reasons&&<ChevronDown className={`le-step-chevron ${expanded?'is-open':''}`} size={14} aria-hidden="true"/>}</button>{reasons&&expanded&&<div className="le-step-why" id={`le-step-why-${index}`}><Reasons plan={plan} step={item}/></div>}</li>;})}</ol>}
       {(plan.summary||plan.warnings.length>0)&&<div className="le-notes"><strong>Keep in mind</strong><ul><li>{plan.summary}</li>{plan.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul></div>}
       <p className="le-local-note">{plan.byAgent?<>Chosen by the {place} agent.<br/>{plan.steps.some(item=>item.agentReason)?`Every change passed the ${place} checks; figures are measured here.`:'Figures are measured here.'}</>:<>Prepared layouts · plays on your device.<br/>No AI calls for layout playback.</>}</p>
     </div>

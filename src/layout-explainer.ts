@@ -1,4 +1,5 @@
 import { getFootprint, kindsForSpace, validateLayout } from './domain';
+import { GOALS, goalLines, goalReason, measureStore, type LayoutGoal } from './layout-goals';
 import type { FurnitureItem, ItemKind, Layout, RoomSpec, SpaceType } from './types';
 
 /** One piece a step changes, with the piece as the step starts and as it ends (absent for an addition or a removal). */
@@ -20,6 +21,7 @@ export interface LayoutExplanationStep {
   title: string;
   description: string;
   why?: string;
+  goalWhy?: string;
   agentReason?: string;
   from?: FurnitureItem;
   to?: FurnitureItem;
@@ -32,6 +34,7 @@ export interface LayoutExplanationPlan {
   title: string;
   request?: string;
   byAgent?: boolean;
+  goal?: { id: LayoutGoal; label: string; heading: string; lines: [string, string][]; note: string };
   steps: LayoutExplanationStep[];
   totalDurationMs: number;
   summary: string;
@@ -359,7 +362,22 @@ export function layoutsDiffer(from: Layout, to: Layout): boolean {
 }
 const intent = (layout: Layout) => layout.description.trim().replace(/[.!]+$/, '');
 /** A deterministic explanation of preset differences, not an optimization or physical motion simulation. */
-export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType): LayoutExplanationPlan {
+export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType, goal?: LayoutGoal): LayoutExplanationPlan {
+  const plan = explain(from, to, room, space);
+  return goal && (space ?? spaceOfLayouts(from, to)) === 'retail' ? withGoal(plan, from, to, room, goal) : plan;
+}
+function withGoal(plan: LayoutExplanationPlan, from: Layout, to: Layout, room: RoomSpec, goal: LayoutGoal): LayoutExplanationPlan {
+  const start = measureStore(from, room), end = measureStore(to, room);
+  let reached = from, measured = start;
+  const steps = plan.steps.map(step => {
+    if (step.kind === 'finish') return { ...step, goalWhy: goalReason(goal, start, end) };
+    const next = completedStep(reached, step), after = measureStore(next, room), goalWhy = goalReason(goal, measured, after);
+    reached = next; measured = after;
+    return { ...step, goalWhy };
+  });
+  return { ...plan, steps, goal: { id: goal, ...GOALS[goal], lines: goalLines(goal, start, end) }, warnings: [...plan.warnings, GOALS[goal].note] };
+}
+function explain(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType): LayoutExplanationPlan {
   const before = itemMap(from), after = itemMap(to), steps: LayoutExplanationStep[] = [], warnings: string[] = [];
   const retail = (space ?? spaceOfLayouts(from, to)) === 'retail', place = retail ? 'store' : 'room', Place = retail ? 'Store' : 'Room', pieces = retail ? 'fixture' : 'furniture';
   for (const item of from.items) {

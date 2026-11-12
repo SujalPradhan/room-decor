@@ -113,3 +113,11 @@
 .layout-delete:hover { color:#eae8df; border-color:#dabe8980; }
 .layout-delete:disabled { display:none; }
 @media (hover:none) { .layout-delete { opacity:1; } }
+.le-step-chevron { flex-shrink:0; color:#7e9074; transition:transform .16s; }
+.le-step-chevron.is-open { transform:rotate(180deg); }
+.le-step-why { margin:2px 0 6px 39px; padding:2px 8px 8px 10px; border-left:1px solid #dabe8930; }
+.le-step-why p.le-why { margin:8px 0 0; font-size:11px; line-height:1.6; color:#c9cebf; overflow-wrap:anywhere; }
+.le-goal { margin-top:12px; padding-top:10px; border-top:1px solid #ffffff12; }
+.le-goal-heading { display:block; color:var(--gold,#dabe89); font-size:10px; font-weight:600; letter-spacing:.04em; }
+.le-current-step .le-goal p.le-floor { margin-top:6px; padding-top:0; border-top:0; }
+@media (prefers-reduced-motion: reduce) { .le-step-chevron { transition:none; } }

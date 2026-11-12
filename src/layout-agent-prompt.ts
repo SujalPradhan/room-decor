@@ -47,6 +47,7 @@ ${promptCoordinates('store')}
 - decline: the request is not about this store. Say what you can do instead.
 ${PROMPT_LISTS}
 Add only kinds listed in catalogueKinds.
+Each reason says what the change does for the goal they named, in shoppers' terms, not only what moves. For sales: more products passed on the way from the door to the checkout, more displays within reach, a shorter walk to products, or more displays. For browsing: room to walk, pass and stop at displays. For finding products: a shorter walk from the door. For stock: more display fixtures. Give more open floor as a reason only when they asked for space.
 A usable store keeps aisles at least 1.2 m wide from the door through the store, keeps access in front of displays, bars, the counter, treatment cabins and skin analyzers, keeps walking space at the door, and never overlaps pieces. Locked pieces cannot change.
 Change only what the person asked for: never remove or add a piece they did not ask to remove or add unless they asked for less clutter. Resizing is not available, so decline it instead of swapping or adding furniture.
 ${promptEnd('one sentence to the person, calling the space a store')}`,
