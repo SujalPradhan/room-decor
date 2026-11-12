@@ -21,6 +21,7 @@ export function readLayoutAgentResult(value: unknown, project: Project): LayoutA
   if (result.action !== 'rearrange') throw new Error('Unknown agent action.');
   const reasons = result.reasons;
   if (!reasons || typeof reasons !== 'object' || Object.values(reasons).some(reason => typeof reason !== 'string')) throw new Error('Invalid agent reasons.');
+  if (result.shorts !== undefined && (!result.shorts || typeof result.shorts !== 'object' || Object.values(result.shorts).some(short => typeof short !== 'string'))) throw new Error('Invalid agent shorts.');
   if (!result.layout || project.layouts.some(layout => layout.id === result.layout.id)) throw new Error('Invalid agent layout.');
   const opened = parseProject(serializeProject({ ...project, layouts: [...project.layouts.slice(0, 11), result.layout] }));
   const layout = opened.layouts[opened.layouts.length - 1], from = project.layouts.find(item => item.id === project.activeLayoutId)!;

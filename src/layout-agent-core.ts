@@ -7,7 +7,7 @@ import type { LayoutAgentResult } from './layout-agent-types';
 /** The agent loop and every check it runs. This runs in the browser; the server only relays model calls. */
 /** A piece the settling step carried far from where the model put it, which the person should hear about. */
 interface Settled { id: string; note: string }
-type Outcome = ({ action: 'rearrange'; layout: Layout; reasons: Record<string, string>; reply: string } | { action: 'use_layout'; layoutId: string; reply: string } | { action: 'decline'; reply: string }) & { goals?: Proposal['goals']; limits?: string };
+type Outcome = ({ action: 'rearrange'; layout: Layout; reasons: Record<string, string>; shorts: Record<string, string>; reply: string } | { action: 'use_layout'; layoutId: string; reply: string } | { action: 'decline'; reply: string }) & { goals?: Proposal['goals']; limits?: string };
 /** What the checks make of one proposal: a result for the person, or the problems to send back to the model. */
 export type Verdict = { outcome: Outcome; problems?: undefined } | { outcome?: undefined; problems: string[] };
 
@@ -215,6 +215,13 @@ function agentReasons(proposal: Proposal, added: [string, string][], settled: Se
   if (proposal.colorReason.trim()) reasons.finish = proposal.colorReason.trim().slice(0, 220);
   return reasons;
 }
+function agentShorts(proposal: Proposal, added: [string, string][]): Record<string, string> {
+  const shorts: Record<string, string> = {};
+  for (const change of [...proposal.moves, ...proposal.recolors, ...proposal.removals]) if (change.why && !shorts[change.itemId]) shorts[change.itemId] = change.why;
+  proposal.additions.forEach((addition, index) => { if (addition.why && added[index]) shorts[added[index][0]] = addition.why; });
+  if (proposal.colorWhy) shorts.finish = proposal.colorWhy;
+  return shorts;
+}
 /** One attempt's checks. This is the only heavy step, so it is what a Web Worker runs. */
 export function judgeProposal(project: Project, request: string, proposal: Proposal): Verdict {
   const reading = { goals: spaceOf(project) === 'retail' ? proposal.goals : [], limits: proposal.limits.trim() };
@@ -222,7 +229,7 @@ export function judgeProposal(project: Project, request: string, proposal: Propo
   if (proposal.action === 'use_layout') return project.layouts.some(layout => layout.id === proposal.layoutId) ? { outcome: { action: 'use_layout', layoutId: proposal.layoutId, reply: proposal.reply, ...reading } } : { problems: [`No saved layout has the id "${proposal.layoutId.slice(0, 40)}".`] };
   const active = activeOf(project), review = reviewMoves(project, active, proposal, request);
   if (review.problems.length) return { problems: review.problems };
-  return { outcome: { action: 'rearrange', layout: review.layout, reasons: agentReasons(proposal, review.added, review.settled), reply: [withRemovals(proposal, active), ...review.settled.map(({ note }) => note)].join(' '), ...reading } };
+  return { outcome: { action: 'rearrange', layout: review.layout, reasons: agentReasons(proposal, review.added, review.settled), shorts: agentShorts(proposal, review.added), reply: [withRemovals(proposal, active), ...review.settled.map(({ note }) => note)].join(' '), ...reading } };
 }
 
 /** Thrown by ask when the model answered but its reply could not be read; that attempt is fed back, not failed over. */

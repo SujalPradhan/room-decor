@@ -505,3 +505,19 @@ test('the agent reads several goals and a limit, and the walkthrough measures ea
   await panel.screenshot({ path: `${SHOTS}/agent-goals-walkthrough.png` });
   expect(errors).toEqual([]);
 });
+
+test("each step row shows the agent's own short why without a click", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page, '/?space=retail', storeKey);
+  const tables = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!).layouts[0].items.filter((i: { kind: string }) => i.kind === 'display-table').slice(0, 2).map((i: { id: string }) => i.id), storeKey);
+  const proposal = { action: 'rearrange', goal: 'other', goals: [], limits: '', layoutId: '', name: 'Launch', description: 'Ready for the opening', reply: 'Brightened the arrival tables for the launch.', moves: [], removals: [], additions: [], recolors: tables.map((itemId: string) => ({ itemId, color: '#ffffff', reason: 'White tables make the new product stand out.', why: 'Spotlights the new product' })), wallColor: '', accentColor: '', colorReason: '' };
+  await page.route('**/api/layout-agent', r => r.fulfill({ json: { proposal, provider: 'LLM Foundry', model: 'test' } }));
+  await page.getByRole('textbox', { name: 'Describe what you want from this store', exact: true }).fill('adjust layout for a new product opening');
+  await page.getByRole('button', { name: 'Rearrange the store', exact: true }).click();
+  await page.getByRole('button', { name: 'Pause layout walkthrough', exact: true }).click();
+  const rows = page.locator('.le-step-list li');
+  await expect(rows.first().locator('.le-step-short')).toHaveText('Why Spotlights the new product');
+  await expect(rows.first().locator('[aria-expanded]')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('.le-step-list').screenshot({ path: `${SHOTS}/agent-short-why.png` });
+  expect(errors).toEqual([]);
+});

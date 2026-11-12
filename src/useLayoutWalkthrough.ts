@@ -12,6 +12,13 @@ export function agentReasonFor(step:LayoutExplanationStep,reasons?:Record<string
  const found=[...new Set(keys.map(key=>reasons[key]?.trim()).filter((reason):reason is string=>Boolean(reason)))];
  return found.length?found.join(' '):undefined;
 }
+export function agentShortFor(step:LayoutExplanationStep,shorts?:Record<string,string>):string|undefined{
+ if(!shorts)return undefined;
+ const keys=step.parts?[...new Set([step.itemId,...step.parts.map(part=>part.itemId),...(step.kind==='finish'?['finish']:[])])]:[step.itemId??'finish'];
+ const found=keys.map(key=>key&&shorts[key]?.trim()).filter((short):short is string=>Boolean(short)),tally=new Map<string,number>();
+ for(const short of found)tally.set(short,(tally.get(short)??0)+1);
+ return [...tally].sort((a,b)=>b[1]-a[1])[0]?.[0];
+}
 /** The piece to outline while a step plays. A chapter moves several pieces at once, so it outlines none rather than one of them. */
 export function highlightFor(step?:LayoutExplanationStep):string|undefined{return step&&!(step.parts&&step.parts.length>1)?step.itemId:undefined;}
 export function useLayoutWalkthrough(onFrame:(layout:Layout|null,itemId?:string)=>void,onComplete:(targetId:string)=>boolean){
@@ -42,7 +49,7 @@ export function useLayoutWalkthrough(onFrame:(layout:Layout|null,itemId?:string)
  },[view?.playing,view?.plan.id]);
  useEffect(()=>()=>{current.current=null;},[]);
  return {view,current,
-  start(from:Layout,to:Layout,room:RoomSpec,request?:string,reasons?:Record<string,string>,byAgent=false,space?:SpaceType,reading:{goals?:LayoutGoal[];limits?:string}={}){const begin=performance.now(),goals=[...new Set([...(reading.goals??[]),...goalsOf(request,space)])],limits=reading.limits?.trim()?[reading.limits.trim()]:limitsOf(request,space,goals),built=buildLayoutExplanation(from,to,room,space,goals,limits),plan={...built,request,byAgent,steps:built.steps.map(step=>({...step,agentReason:agentReasonFor(step,reasons)}))},reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;current.current={from:structuredClone(from),to:structuredClone(to),plan,elapsedMs:reduced?plan.totalDurationMs:0,stepIndex:0,playing:!reduced,finished:false,speed:1,completed:false,preparationMs:performance.now()-begin};draw();publish();},
+  start(from:Layout,to:Layout,room:RoomSpec,request?:string,reasons?:Record<string,string>,byAgent=false,space?:SpaceType,reading:{goals?:LayoutGoal[];limits?:string;shorts?:Record<string,string>}={}){const begin=performance.now(),goals=[...new Set([...(reading.goals??[]),...goalsOf(request,space)])],limits=reading.limits?.trim()?[reading.limits.trim()]:limitsOf(request,space,goals),built=buildLayoutExplanation(from,to,room,space,goals,limits),plan={...built,request,byAgent,steps:built.steps.map(step=>{const short=agentShortFor(step,reading.shorts);return {...step,agentReason:agentReasonFor(step,reasons),...(short&&{short:{text:short}})};})},reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;current.current={from:structuredClone(from),to:structuredClone(to),plan,elapsedMs:reduced?plan.totalDurationMs:0,stepIndex:0,playing:!reduced,finished:false,speed:1,completed:false,preparationMs:performance.now()-begin};draw();publish();},
   close(){current.current=null;callbacks.current.onFrame(null);setView(null);},
   toggle(){const s=current.current;if(!s)return;if(s.finished){s.elapsedMs=0;s.finished=false;}s.playing=!s.playing;draw();publish();},
   replay(){const s=current.current;if(!s)return;s.elapsedMs=0;s.finished=false;s.playing=!window.matchMedia('(prefers-reduced-motion: reduce)').matches;draw();publish();},

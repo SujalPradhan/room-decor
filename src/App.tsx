@@ -514,7 +514,7 @@ export default function App() {
   const presenting=Boolean(walkthrough.view&&!walkthrough.view.finished);
   const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState<LayoutAgentReply|null>(null),agentInput=useRef<HTMLInputElement>(null),[agentBusy,setAgentBusy]=useState(false);
   const agentAbort=useRef<AbortController|null>(null),movedOn=useRef(false),[agentAttempt,setAgentAttempt]=useState(1);
-  const startPreset=(targetId:string,request?:string,byAgent=false,reading?:{goals?:LayoutGoal[];limits?:string})=>{
+  const startPreset=(targetId:string,request?:string,byAgent=false,reading?:{goals?:LayoutGoal[];limits?:string;shorts?:Record<string,string>})=>{
     const current=projectRef.current,target=current.layouts.find(l=>l.id===targetId);
     if(!target||(!presenting&&current.activeLayoutId===targetId))return;
     if(presenting&&walkthrough.view?.plan.toId===targetId)return;

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createFurnitureItem, createInitialProject, createRetailProject } from '../src/domain';
 import { judgeProposal } from '../src/layout-agent-core';
 import { readProposal } from '../src/layout-agent-prompt';
-import { buildLayoutExplanation } from '../src/layout-explainer';
+import { buildLayoutExplanation, type LayoutExplanationStep } from '../src/layout-explainer';
 import { bestForGoal, goalReason, goalsOf, limitsOf, measureStore } from '../src/layout-goals';
 import { matchLayoutIntent } from '../src/layout-intent';
+import { agentShortFor } from '../src/useLayoutWalkthrough';
 import type { FurnitureItem, ItemKind, Layout, RoomSpec } from '../src/types';
 
 const room: RoomSpec = { ...createRetailProject().room, width: 10, depth: 10, door: { wall: 'front', offset: 0, width: 2, height: 3 } };
@@ -185,5 +186,28 @@ describe('the short why on every step', () => {
     expect(sales.steps.some(step => /near checkout|within reach|Products/.test(step.short!.text))).toBe(true);
     expect(sales.steps.some(step => /m² of floor/.test(step.short!.text) && !step.short!.tradeOff && step.short!.text.startsWith('Opens'))).toBe(false);
     expect(noGoal.steps.find(step => step.title.includes('fragrance towers'))!.short).toEqual({ text: 'Products 0.3 m closer' });
+  });
+});
+
+describe("the agent's own short why", () => {
+  const change = { action: 'rearrange', goal: 'other', layoutId: '', name: 'Launch', description: 'Launch', reply: 'Done.', moves: [], removals: [], additions: [], wallColor: '#f1e4e0', accentColor: '', colorReason: 'Warmer for the launch.' };
+  it('is asked of the store agent only, and kept to six words', async () => {
+    const { SYSTEM } = await import('../src/layout-agent-prompt');
+    expect(SYSTEM.retail).toContain('three to five plain words');
+    expect(SYSTEM.retail).toContain('"why":""');
+    expect(SYSTEM.room).not.toContain('"why"');
+    const read = readProposal({ ...change, recolors: [{ itemId: 'a', color: '#ffffff', reason: 'r', why: '  frames   the launch entrance for every shopper today ' }], colorWhy: '' });
+    expect(read.recolors[0].why).toBe('frames the launch entrance for every');
+    expect(read).not.toHaveProperty('colorWhy');
+  });
+  it('reaches the step of the piece it is about, and a group step takes the most common one', () => {
+    const project = createRetailProject(), table = project.layouts[0].items.find(item => item.kind === 'display-table')!;
+    const proposal = readProposal({ ...change, recolors: [{ itemId: table.id, color: '#ffffff', reason: 'Brighter.', why: 'Spotlights the new arrivals' }], colorWhy: 'Warms the launch mood' });
+    const outcome = judgeProposal(project, 'adjust layout for a new product opening', proposal).outcome!;
+    expect(outcome).toMatchObject({ shorts: { [table.id]: 'Spotlights the new arrivals', finish: 'Warms the launch mood' } });
+    const step = { id: 's', kind: 'move', title: 't', description: '', durationMs: 1, itemId: 'a', parts: [{ itemId: 'a' }, { itemId: 'b' }, { itemId: 'c' }] } as LayoutExplanationStep;
+    expect(agentShortFor(step, { a: 'Frames the entrance', b: 'Clears the aisle', c: 'Clears the aisle' })).toBe('Clears the aisle');
+    expect(agentShortFor(step, { a: 'Frames the entrance', b: 'Clears the aisle' })).toBe('Frames the entrance');
+    expect(agentShortFor(step, {})).toBeUndefined();
   });
 });
