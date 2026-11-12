@@ -88,7 +88,8 @@ describe('goal explanations', () => {
     expect(plan.steps.at(-1)!.goalWhys![0].text).toBe(goalReason('sales', measureStore(from, project.room), measureStore(services, project.room)));
     expect(plan.warnings.at(-1)).toContain('not a sales forecast');
     expect(plan.steps.map(step => step.goalWhys![0].text).join(' ')).not.toMatch(/open floor|\d+%|increase sales|will sell/i);
-    expect(plan.steps.map(step => step.why)).toEqual(buildLayoutExplanation(from, services, project.room, 'retail').steps.map(step => step.why));
+    const plain = buildLayoutExplanation(from, services, project.room, 'retail').steps;
+    plan.steps.forEach((step, index) => expect(plain[index].why!.endsWith(step.why!)).toBe(true));
   });
   it('measures each goal of a request separately, access with a wheelchair aisle', () => {
     const plan = buildLayoutExplanation(from, services, project.room, 'retail', ['sales', 'access']);
@@ -150,5 +151,39 @@ describe('rules for a goal', () => {
   it('still lets themes and edits go first', () => {
     expect(matchLayoutIntent('a space for launch events', project.layouts, 'original', project.room, 'retail').targetId).toBe('open-event');
     expect(matchLayoutIntent('add a display to improve sales', project.layouts, 'original', project.room, 'retail').targetId).toBeUndefined();
+  });
+});
+
+describe('the short why on every step', () => {
+  const project = createRetailProject(), home = createInitialProject();
+  const switches = [
+    ...project.layouts.slice(1).map(to => buildLayoutExplanation(project.layouts[0], to, project.room, 'retail')),
+    buildLayoutExplanation(project.layouts[0], project.layouts[4], project.room, 'retail', ['sales']),
+    buildLayoutExplanation(project.layouts[0], project.layouts[1], project.room, 'retail', ['find', 'access']),
+    buildLayoutExplanation(home.layouts[0], home.layouts[1], home.room),
+  ];
+  it('is on every step and short enough to read at a glance', () => {
+    for (const plan of switches) for (const step of plan.steps) {
+      expect(step.short, step.title).toBeDefined();
+      expect(step.short!.text.split(/\s+/).length, step.short!.text).toBeLessThanOrEqual(6);
+    }
+  });
+  it('marks a cost as a trade-off, never as a why', () => {
+    const shorts = switches.flatMap(plan => plan.steps.map(step => step.short!));
+    for (const short of shorts) expect(/fewer|less|further|Uses|Blocks/.test(short.text), short.text).toBe(Boolean(short.tradeOff));
+  });
+  it('agrees with the measured why it summarises', () => {
+    for (const plan of switches.slice(0, 4)) for (const step of plan.steps.filter(item => item.kind !== 'finish')) {
+      const text = step.short!.text;
+      if (text.startsWith('Opens')) expect(step.why).toContain('Opens');
+      if (text.startsWith('Clears')) expect(step.why).toContain('Clears');
+      if (/closer|near checkout|walking room|within reach/.test(text)) expect(step.why).toMatch(/Shortens|Puts|Adds|Opens a 1.2 m aisle/);
+    }
+  });
+  it('follows the goal asked for, and gives a store reason when floor is not the reason', () => {
+    const sales = switches[4], noGoal = switches[0];
+    expect(sales.steps.some(step => /near checkout|within reach|Products/.test(step.short!.text))).toBe(true);
+    expect(sales.steps.some(step => /m² of floor/.test(step.short!.text) && !step.short!.tradeOff && step.short!.text.startsWith('Opens'))).toBe(false);
+    expect(noGoal.steps.find(step => step.title.includes('fragrance towers'))!.short).toEqual({ text: 'Products 0.3 m closer' });
   });
 });

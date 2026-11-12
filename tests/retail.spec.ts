@@ -472,6 +472,8 @@ test('a sales request explains each change through sales measures, and each step
   await expect(panel.locator('.le-current-step .le-why').filter({ hasText: 'For sales' })).toHaveCount(1);
   const row = page.getByRole('button', { name: /^Go to step 3:/ });
   await expect(row).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel.locator('.le-step-short')).toHaveCount(await panel.locator('.le-step-list li').count());
+  await expect(row.locator('.le-step-short')).toHaveText(/^(Why|Trade-off) .+/);
   await row.click();
   await expect(row).toHaveAttribute('aria-expanded', 'true');
   const why = page.locator('#le-step-why-2');

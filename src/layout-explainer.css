@@ -126,3 +126,6 @@
 .le-limits ul { margin:4px 0 0; padding-left:15px; }
 .le-limits li { overflow-wrap:anywhere; }
 .le-limits li+li { margin-top:3px; }
+.le-step-short { display:block; margin-top:3px; color:#c9cebf; font-size:10px; line-height:1.4; }
+.le-step-short strong { margin-right:4px; color:var(--gold,#dabe89); font-weight:600; }
+.le-step-short.is-trade-off strong { color:#c9a27e; }

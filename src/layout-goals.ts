@@ -155,9 +155,14 @@ export function measureStore(layout: Layout, room: RoomSpec, aisle = AISLE): Sto
 
 const one = (value: number) => Number(value.toFixed(1)).toString();
 const displaysWord = (n: number) => `${n} ${n === 1 ? 'display' : 'displays'}`;
-type Lever = { change(before: StoreMeasures, after: StoreMeasures): string | undefined; line(before: StoreMeasures, after: StoreMeasures): [string, string] | undefined; name: string };
-const counted = (key: 'onRoute' | 'reachable' | 'displays', name: string, more: string, fewer: string, line: string): Lever => ({
+export interface ShortReason { text: string; gain: boolean; long?: string }
+type Lever = { change(before: StoreMeasures, after: StoreMeasures): string | undefined; short(before: StoreMeasures, after: StoreMeasures): ShortReason | undefined; line(before: StoreMeasures, after: StoreMeasures): [string, string] | undefined; name: string };
+const counted = (key: 'onRoute' | 'displays', name: string, more: string, fewer: string, line: string, short: (n: number, more: boolean) => string): Lever => ({
   name,
+  short(before, after) {
+    const a = before[key], b = after[key];
+    return Number.isFinite(a) && Number.isFinite(b) && a !== b ? { text: short(Math.abs(b - a), b > a), gain: b > a } : undefined;
+  },
   change(before, after) {
     const a = before[key], b = after[key];
     if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return undefined;
@@ -166,7 +171,7 @@ const counted = (key: 'onRoute' | 'reachable' | 'displays', name: string, more: 
   line(before, after) { const a = before[key], b = after[key]; return Number.isFinite(a) && Number.isFinite(b) ? [line, `${a} → ${b}`] : undefined; },
 });
 const LEVERS = {
-  onRoute: counted('onRoute', 'displays on the way to checkout', 'Puts # more on the shortest walk from the door to checkout, so shoppers pass more products before they pay', 'Takes # off the shortest walk from the door to checkout, so shoppers pass fewer products before they pay', 'Displays on the way to checkout'),
+  onRoute: counted('onRoute', 'displays on the way to checkout', 'Puts # more on the shortest walk from the door to checkout, so shoppers pass more products before they pay', 'Takes # off the shortest walk from the door to checkout, so shoppers pass fewer products before they pay', 'Displays on the way to checkout', (n, more) => `${n} ${more ? 'more' : 'fewer'} ${n === 1 ? 'display' : 'displays'} near checkout`),
   reachable: {
     name: 'displays within reach',
     change(before, after) {
@@ -174,15 +179,23 @@ const LEVERS = {
       if (a === b) return undefined;
       return b > a ? `Opens a ${after.aisle} m aisle from the door to ${displaysWord(b - a)} more, so ${wide ? 'a wheelchair or pram can reach them' : 'shoppers can pick from them without squeezing past fixtures'} (${a} → ${b}).` : `Leaves ${displaysWord(a - b)} without a ${after.aisle} m aisle from the door, so ${wide ? 'a wheelchair or pram cannot reach them' : 'shoppers have to squeeze past fixtures to pick from them'} (${a} → ${b}).`;
     },
+    short(before, after) {
+      const a = before.reachable, b = after.reachable, n = Math.abs(b - a);
+      return a === b ? undefined : { text: `${n} ${b > a ? 'more' : 'fewer'} ${n === 1 ? 'display' : 'displays'} ${after.aisle >= WHEELCHAIR_AISLE ? 'wheelchair-reachable' : 'within reach'}`, gain: b > a };
+    },
     line(before, after) { return [after.aisle >= WHEELCHAIR_AISLE ? `Displays within reach of a ${after.aisle} m aisle` : 'Displays within reach', `${before.reachable} → ${after.reachable}`]; },
   },
-  displays: counted('displays', 'display count', 'Adds #, so the store holds and shows more products', 'Removes #, so the store holds and shows fewer products', 'Product displays'),
+  displays: counted('displays', 'display count', 'Adds #, so the store holds and shows more products', 'Removes #, so the store holds and shows fewer products', 'Product displays', (n, more) => `${n} ${more ? 'more' : 'fewer'} product ${n === 1 ? 'display' : 'displays'}`),
   walk: {
     name: 'walk to products',
     change(before, after) {
       const a = before.walkToDisplay, b = after.walkToDisplay;
       if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(b - a) < .2) return undefined;
       return b < a ? `Shortens the average walk from the door to a display from ${one(a)} to ${one(b)} m, so shoppers reach products sooner.` : `Lengthens the average walk from the door to a display from ${one(a)} to ${one(b)} m, so shoppers take longer to reach products.`;
+    },
+    short(before, after) {
+      const a = before.walkToDisplay, b = after.walkToDisplay;
+      return !Number.isFinite(a) || !Number.isFinite(b) || Math.abs(b - a) < .2 ? undefined : { text: `Products ${one(Math.abs(b - a))} m ${b < a ? 'closer' : 'further'}`, gain: b < a };
     },
     line(before, after) { return Number.isFinite(before.walkToDisplay) && Number.isFinite(after.walkToDisplay) ? ['Average walk to a display', `${one(before.walkToDisplay)} → ${one(after.walkToDisplay)} m`] : undefined; },
   },
@@ -194,6 +207,10 @@ const LEVERS = {
       const who = after.aisle >= WHEELCHAIR_AISLE ? 'a wheelchair or pram can use' : 'a shopper can walk';
       return b > a ? `Adds ${one(b - a)} m² of aisle ${who} (${one(a)} → ${one(b)} m²), so people pass each other and stop to look without blocking the way.` : `Takes ${one(a - b)} m² from the aisles ${who} (${one(a)} → ${one(b)} m²), so people have less room to pass and stop to look.`;
     },
+    short(before, after) {
+      const a = before.walkable, b = after.walkable;
+      return Math.abs(b - a) < .5 ? undefined : { text: `${one(Math.abs(b - a))} m² ${b > a ? 'more' : 'less'} ${after.aisle >= WHEELCHAIR_AISLE ? 'wheelchair aisle' : 'walking room'}`, gain: b > a };
+    },
     line(before, after) { return [after.aisle >= WHEELCHAIR_AISLE ? `Aisle floor for a ${after.aisle} m aisle` : 'Walkable aisle floor', `${one(before.walkable)} → ${one(after.walkable)} m²`]; },
   },
   displayArea: {
@@ -202,6 +219,10 @@ const LEVERS = {
       const a = before.displayArea, b = after.displayArea;
       if (Math.abs(b - a) < .1 || before.displays !== after.displays) return undefined;
       return b > a ? `Gives products ${one(b - a)} m² more fixture floor (${one(a)} → ${one(b)} m²).` : `Gives products ${one(a - b)} m² less fixture floor (${one(a)} → ${one(b)} m²).`;
+    },
+    short(before, after) {
+      const a = before.displayArea, b = after.displayArea;
+      return Math.abs(b - a) < .1 || before.displays !== after.displays ? undefined : { text: `${one(Math.abs(b - a))} m² ${b > a ? 'more' : 'less'} display floor`, gain: b > a };
     },
     line(before, after) { return ['Display floor', `${one(before.displayArea)} → ${one(after.displayArea)} m²`]; },
   },
@@ -215,6 +236,11 @@ const LEVERS_EXTRA = {
       if (!Number.isFinite(a) || Math.abs(b - a) < .2) return undefined;
       return b < a ? `Shortens the walk from the door to checkout from ${one(a)} to ${one(b)} m, so shoppers who are ready to pay get there sooner.` : `Lengthens the walk from the door to checkout from ${one(a)} to ${one(b)} m, so shoppers who are ready to pay walk further.`;
     },
+    short(before, after) {
+      const a = before.walkToCheckout, b = after.walkToCheckout;
+      if (Number.isFinite(a) !== Number.isFinite(b)) return Number.isFinite(b) ? { text: 'Opens a path to checkout', gain: true } : { text: 'Blocks the path to checkout', gain: false };
+      return !Number.isFinite(a) || Math.abs(b - a) < .2 ? undefined : { text: `Checkout ${one(Math.abs(b - a))} m ${b < a ? 'closer' : 'further'}`, gain: b < a };
+    },
     line(before, after) { return Number.isFinite(before.walkToCheckout) && Number.isFinite(after.walkToCheckout) ? ['Walk from the door to checkout', `${one(before.walkToCheckout)} → ${one(after.walkToCheckout)} m`] : undefined; },
   },
   queue: {
@@ -223,6 +249,10 @@ const LEVERS_EXTRA = {
       const a = before.queueSpace, b = after.queueSpace;
       if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(b - a) < .5) return undefined;
       return b > a ? `Gives the checkout queue ${one(b - a)} m² more clear floor (${one(a)} → ${one(b)} m²), so a line can form without blocking the aisle.` : `Leaves the checkout queue ${one(a - b)} m² less clear floor (${one(a)} → ${one(b)} m²), so a line is more likely to block the aisle.`;
+    },
+    short(before, after) {
+      const a = before.queueSpace, b = after.queueSpace;
+      return !Number.isFinite(a) || !Number.isFinite(b) || Math.abs(b - a) < .5 ? undefined : { text: `${one(Math.abs(b - a))} m² ${b > a ? 'more' : 'less'} queue space`, gain: b > a };
     },
     line(before, after) { return Number.isFinite(before.queueSpace) && Number.isFinite(after.queueSpace) ? ['Clear floor for the queue', `${one(before.queueSpace)} → ${one(after.queueSpace)} m²`] : undefined; },
   },
@@ -240,6 +270,9 @@ const list = (words: string[]) => words.length < 2 ? words.join('') : `${words.s
 export function goalReason(goal: LayoutGoal, before: StoreMeasures, after: StoreMeasures): string {
   const levers = LEVERS_FOR[goal], said = levers.map(lever => lever.change(before, after)).filter((text): text is string => Boolean(text));
   return said.length ? said.join(' ') : `On its own this leaves the ${list(levers.map(lever => lever.name))} as they were; it is part of the full arrangement.`;
+}
+export function goalShorts(goal: LayoutGoal, before: StoreMeasures, after: StoreMeasures): ShortReason[] {
+  return LEVERS_FOR[goal].flatMap(lever => { const short = lever.short(before, after); return short ? [{ ...short, long: lever.change(before, after) }] : []; });
 }
 export function goalLines(goal: LayoutGoal, before: StoreMeasures, after: StoreMeasures): [string, string][] {
   return LEVERS_FOR[goal].map(lever => lever.line(before, after)).filter((line): line is [string, string] => Boolean(line));

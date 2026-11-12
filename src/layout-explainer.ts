@@ -1,5 +1,5 @@
 import { getFootprint, kindsForSpace, validateLayout } from './domain';
-import { aisleFor, GOALS, goalLines, goalReason, measureStore, type LayoutGoal } from './layout-goals';
+import { aisleFor, GOALS, goalLines, goalReason, goalShorts, measureStore, type LayoutGoal } from './layout-goals';
 import type { FurnitureItem, ItemKind, Layout, RoomSpec, SpaceType } from './types';
 
 /** One piece a step changes, with the piece as the step starts and as it ends (absent for an addition or a removal). */
@@ -8,6 +8,7 @@ export interface LayoutExplanationPart {
   from?: FurnitureItem;
   to?: FurnitureItem;
 }
+export interface StepShort { text: string; tradeOff?: boolean }
 export interface LayoutExplanationStep {
   id: string;
   /** The piece the step is about. For a chapter step this is its lead piece, the one that travels furthest. */
@@ -22,6 +23,7 @@ export interface LayoutExplanationStep {
   description: string;
   why?: string;
   goalWhys?: { goal: LayoutGoal; label: string; text: string }[];
+  short?: StepShort;
   agentReason?: string;
   from?: FurnitureItem;
   to?: FurnitureItem;
@@ -150,6 +152,20 @@ function stepReason(step: LayoutExplanationStep, floorBefore: number, floorAfter
   if (!step.to) return `Takes it out of the ${place}.`;
   if (!step.from) return `Adds it to the ${place}.`;
   return step.kind === 'move' ? `Leaves the largest open area as it is; this is where ${targetName} puts it.` : 'Leaves the largest open area as it is.';
+}
+
+const FINAL = 'Part of the final layout';
+const tenth = (value: number) => Number(value.toFixed(1)).toString();
+function shortReason(floorBefore: number, floorAfter: number, issuesBefore: number, issuesAfter: number): StepShort {
+  const change = floorAfter - floorBefore, cleared = issuesBefore - issuesAfter;
+  if (change >= .05) return { text: `Opens ${tenth(change)} m² of floor` };
+  if (cleared > 0) return { text: `Clears ${count(cleared)} crowded ${cleared === 1 ? 'spot' : 'spots'}` };
+  if (change <= -.05) return { text: `Uses ${tenth(-change)} m² of floor`, tradeOff: true };
+  return { text: FINAL };
+}
+function finishShort(startFloor: number, endFloor: number, coloured: boolean): StepShort {
+  if (coloured) return { text: 'New colours, nothing moves' };
+  return endFloor - startFloor >= .05 ? { text: `Opens ${tenth(endFloor - startFloor)} m² overall` } : { text: 'Shows the finished layout' };
 }
 
 const GREEDY_STEPS = 12, RANK_CELL = .1;
@@ -336,6 +352,7 @@ function chapterSteps(from: Layout, to: Layout, room: RoomSpec, pieceSteps: Layo
       title: chapterTitle(group.parts, group.label, room, context.place),
       description: chapterDescription(group.parts, group.held, context.place),
       why: chapterReason(reachedFloor, nextFloor, reachedIssues, nextIssues, context, group.parts, room, to.name),
+      short: shortReason(reachedFloor, nextFloor, reachedIssues, nextIssues),
       ...(lead.from && { from: clone(lead.from) }), ...(lead.to && { to: clone(lead.to) }),
       durationMs: Math.min(CHAPTER_MAX_MS, CHAPTER_MIN_MS + 100 * (group.parts.length - 1)),
     });
@@ -346,6 +363,7 @@ function chapterSteps(from: Layout, to: Layout, room: RoomSpec, pieceSteps: Layo
   chapters.push({
     id: 'finish', kind: 'finish', title: colourParts.length || finishChanged ? `New finishes for ${to.name}` : `See ${to.name}`, description: finishDescription(colourParts, from, to),
     why: `${floorWords}${colourParts.length || finishChanged ? ' Colour changes do not move anything.' : ''}`,
+    short: finishShort(context.startOpenFloor, context.endOpenFloor, Boolean(colourParts.length) || finishChanged),
     ...(colourParts.length && { parts: colourParts }), durationMs: FINISH_MS,
   });
   // Each chapter long enough to watch; the whole story about ten to twelve seconds.
@@ -366,18 +384,36 @@ const intent = (layout: Layout) => layout.description.trim().replace(/[.!]+$/, '
 export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType, goals: LayoutGoal[] = [], limits: string[] = []): LayoutExplanationPlan {
   const plan = explain(from, to, room, space);
   if ((space ?? spaceOfLayouts(from, to)) !== 'retail') return plan;
-  const measured = goals.length ? withGoals(plan, from, to, room, [...new Set(goals)]) : plan;
+  const measured = goals.length ? withGoals(plan, from, to, room, [...new Set(goals)]) : withShopperReasons(plan, from, room);
   return limits.length ? { ...measured, limits: [...new Set(limits)] } : measured;
+}
+const SHOPPER_GOALS: LayoutGoal[] = ['find', 'sales', 'browse'];
+function withShopperReasons(plan: LayoutExplanationPlan, from: Layout, room: RoomSpec): LayoutExplanationPlan {
+  let reached = from, measured = measureStore(from, room);
+  const steps = plan.steps.map(step => {
+    if (step.kind === 'finish') return step;
+    const next = completedStep(reached, step), after = measureStore(next, room), before = measured;
+    reached = next; measured = after;
+    if (step.short && !step.short.tradeOff && step.short.text !== FINAL) return step;
+    const gain = SHOPPER_GOALS.flatMap(goal => goalShorts(goal, before, after)).find(item => item.gain);
+    return gain ? { ...step, short: { text: gain.text }, why: [gain.long, step.why].filter(Boolean).join(' ') } : step;
+  });
+  return { ...plan, steps };
 }
 function withGoals(plan: LayoutExplanationPlan, from: Layout, to: Layout, room: RoomSpec, goals: LayoutGoal[]): LayoutExplanationPlan {
   const aisles = [...new Set(goals.map(aisleFor))], measure = (layout: Layout) => new Map(aisles.map(aisle => [aisle, measureStore(layout, room, aisle)]));
   const start = measure(from), end = measure(to), whys = (before: typeof start, after: typeof start) => goals.map(goal => ({ goal, label: GOALS[goal].label, text: goalReason(goal, before.get(aisleFor(goal))!, after.get(aisleFor(goal))!) }));
+  const short = (before: typeof start, after: typeof start): StepShort | undefined => {
+    const shorts = goals.flatMap(goal => goalShorts(goal, before.get(aisleFor(goal))!, after.get(aisleFor(goal))!)), best = shorts.find(item => item.gain) ?? shorts[0];
+    return best && { text: best.text, ...(!best.gain && { tradeOff: true }) };
+  };
   let reached = from, measured = start;
   const steps = plan.steps.map(step => {
-    if (step.kind === 'finish') return { ...step, goalWhys: whys(start, end) };
+    if (step.kind === 'finish') return { ...step, goalWhys: whys(start, end), short: short(start, end) ?? step.short };
     const next = completedStep(reached, step), after = measure(next), goalWhys = whys(measured, after);
+    const stepShort = short(measured, after) ?? (step.short && !step.short.tradeOff ? step.short : { text: FINAL });
     reached = next; measured = after;
-    return { ...step, goalWhys };
+    return { ...step, goalWhys, short: stepShort };
   });
   return { ...plan, steps, goals: goals.map(goal => ({ id: goal, ...GOALS[goal], lines: goalLines(goal, start.get(aisleFor(goal))!, end.get(aisleFor(goal))!) })), warnings: [...plan.warnings, ...goals.map(goal => GOALS[goal].note)] };
 }
@@ -433,11 +469,13 @@ function explain(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType): L
     const index = floors.indexOf(Math.max(...floors)), [step] = pending.splice(index, 1);
     const next = completedStep(reached, step), nextIssues = validateLayout(next, room).length;
     step.why = stepReason(step, reachedFloor, floors[index], reachedIssues, nextIssues, room, to.name, place);
+    step.short = shortReason(reachedFloor, floors[index], reachedIssues, nextIssues);
     steps.push(step);
     reached = next; reachedFloor = floors[index]; reachedIssues = nextIssues;
   }
   if (finishStep) {
     if (Math.abs(endOpenFloor - startOpenFloor) >= .05) finishStep.why = `Largest open floor area goes from ${metres(startOpenFloor)} to ${metres(endOpenFloor)} m².`;
+    finishStep.short = finishShort(startOpenFloor, endOpenFloor, finishChanged);
     steps.push(finishStep);
   }
   const unbounded = steps.reduce((sum, step) => sum + step.durationMs, 0);
