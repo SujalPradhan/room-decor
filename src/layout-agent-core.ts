@@ -7,7 +7,7 @@ import type { LayoutAgentResult } from './layout-agent-types';
 /** The agent loop and every check it runs. This runs in the browser; the server only relays model calls. */
 /** A piece the settling step carried far from where the model put it, which the person should hear about. */
 interface Settled { id: string; note: string }
-type Outcome = { action: 'rearrange'; layout: Layout; reasons: Record<string, string>; reply: string } | { action: 'use_layout'; layoutId: string; reply: string } | { action: 'decline'; reply: string };
+type Outcome = ({ action: 'rearrange'; layout: Layout; reasons: Record<string, string>; reply: string } | { action: 'use_layout'; layoutId: string; reply: string } | { action: 'decline'; reply: string }) & { goals?: Proposal['goals']; limits?: string };
 /** What the checks make of one proposal: a result for the person, or the problems to send back to the model. */
 export type Verdict = { outcome: Outcome; problems?: undefined } | { outcome?: undefined; problems: string[] };
 
@@ -217,11 +217,12 @@ function agentReasons(proposal: Proposal, added: [string, string][], settled: Se
 }
 /** One attempt's checks. This is the only heavy step, so it is what a Web Worker runs. */
 export function judgeProposal(project: Project, request: string, proposal: Proposal): Verdict {
-  if (proposal.action === 'decline') return { outcome: { action: 'decline', reply: proposal.reply } };
-  if (proposal.action === 'use_layout') return project.layouts.some(layout => layout.id === proposal.layoutId) ? { outcome: { action: 'use_layout', layoutId: proposal.layoutId, reply: proposal.reply } } : { problems: [`No saved layout has the id "${proposal.layoutId.slice(0, 40)}".`] };
+  const reading = { goals: spaceOf(project) === 'retail' ? proposal.goals : [], limits: proposal.limits.trim() };
+  if (proposal.action === 'decline') return { outcome: { action: 'decline', reply: proposal.reply, ...reading } };
+  if (proposal.action === 'use_layout') return project.layouts.some(layout => layout.id === proposal.layoutId) ? { outcome: { action: 'use_layout', layoutId: proposal.layoutId, reply: proposal.reply, ...reading } } : { problems: [`No saved layout has the id "${proposal.layoutId.slice(0, 40)}".`] };
   const active = activeOf(project), review = reviewMoves(project, active, proposal, request);
   if (review.problems.length) return { problems: review.problems };
-  return { outcome: { action: 'rearrange', layout: review.layout, reasons: agentReasons(proposal, review.added, review.settled), reply: [withRemovals(proposal, active), ...review.settled.map(({ note }) => note)].join(' ') } };
+  return { outcome: { action: 'rearrange', layout: review.layout, reasons: agentReasons(proposal, review.added, review.settled), reply: [withRemovals(proposal, active), ...review.settled.map(({ note }) => note)].join(' '), ...reading } };
 }
 
 /** Thrown by ask when the model answered but its reply could not be read; that attempt is fed back, not failed over. */

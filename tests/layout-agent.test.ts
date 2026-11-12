@@ -13,7 +13,7 @@ import type { Project } from '../src/types';
 const classicStore = () => parseProject(readFileSync(new URL('./fixtures/classic-store.json', import.meta.url), 'utf8'));
 
 /** The whole path in one process: the browser loop, the real endpoint, and a stubbed model provider. */
-const base = { goal: 'other', layoutId: '', name: 'Quiet corner', description: 'Stool tucked away', reply: 'Moved it.' };
+const base = { goal: 'other', goals: [], limits: '', layoutId: '', name: 'Quiet corner', description: 'Stool tucked away', reply: 'Moved it.' };
 const gemini = (body: unknown) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: typeof body === 'string' ? body : JSON.stringify(body) }] } }] }));
 const local: StudioEnv = { STUDIO_LAYOUT_AGENT_ENABLED: 'true', FOUNDRY_API_KEY: 'token' } as StudioEnv;
 function sequence(...replies: (Response | Error)[]) {
@@ -200,7 +200,7 @@ describe('store agent', () => {
 
 describe('store checks', () => {
   type Change = Parameters<typeof reviewMoves>[2];
-  const blank: Change = { action: 'rearrange', goal: 'other', layoutId: '', name: 'Test', description: 'Test', reply: 'Done.', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '' };
+  const blank: Change = { action: 'rearrange', goal: 'other', goals: [], limits: '', layoutId: '', name: 'Test', description: 'Test', reply: 'Done.', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '' };
   const event = () => { const project = classicStore(); project.activeLayoutId = 'open-event'; return { project, active: project.layouts.find(layout => layout.id === 'open-event')! }; };
   const review = (project: Project, active: typeof project.layouts[0], change: Partial<Change>, request = '') => reviewMoves(project, active, { ...blank, ...change }, request);
   const sealing = ['wall-left-2', 'wall-left-3', 'wall-left-4', 'wall-left-5', 'wall-right-1'].map((itemId, index) => ({ itemId, x: -3.6 + index * 1.8, z: -2.2, rotationDegrees: 0, reason: 'A line of displays.' }));
@@ -348,7 +348,7 @@ describe('model gateway', () => {
     const store = classicStore(), event = classicStore(); event.activeLayoutId = 'open-event';
     const room = createInitialProject(), locked = createInitialProject();
     locked.layouts[0].items.find(item => item.id === 'stool')!.locked = true;
-    const change = (extra: object) => ({ action: 'rearrange', goal: 'other', layoutId: '', name: 'x', description: 'x', reply: 'x', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '', ...extra }) as Parameters<typeof reviewMoves>[2];
+    const change = (extra: object) => ({ action: 'rearrange', goal: 'other', goals: [], limits: '', layoutId: '', name: 'x', description: 'x', reply: 'x', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '', ...extra }) as Parameters<typeof reviewMoves>[2];
     const move = (itemId: string, x: number, z: number, extra: object = {}) => ({ itemId, x, z, rotationDegrees: 0, reason: 'r', ...extra });
     const cases: [Project, ReturnType<typeof change>, string?][] = [
       [room, change({})], [room, change({ moves: Array.from({ length: 8 }, () => move('stool', 0, 0)) })],

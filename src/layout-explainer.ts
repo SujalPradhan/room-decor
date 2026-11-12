@@ -1,5 +1,5 @@
 import { getFootprint, kindsForSpace, validateLayout } from './domain';
-import { GOALS, goalLines, goalReason, measureStore, type LayoutGoal } from './layout-goals';
+import { aisleFor, GOALS, goalLines, goalReason, measureStore, type LayoutGoal } from './layout-goals';
 import type { FurnitureItem, ItemKind, Layout, RoomSpec, SpaceType } from './types';
 
 /** One piece a step changes, with the piece as the step starts and as it ends (absent for an addition or a removal). */
@@ -21,7 +21,7 @@ export interface LayoutExplanationStep {
   title: string;
   description: string;
   why?: string;
-  goalWhy?: string;
+  goalWhys?: { goal: LayoutGoal; label: string; text: string }[];
   agentReason?: string;
   from?: FurnitureItem;
   to?: FurnitureItem;
@@ -34,7 +34,8 @@ export interface LayoutExplanationPlan {
   title: string;
   request?: string;
   byAgent?: boolean;
-  goal?: { id: LayoutGoal; label: string; heading: string; lines: [string, string][]; note: string };
+  goals?: { id: LayoutGoal; label: string; heading: string; lines: [string, string][]; note: string }[];
+  limits?: string[];
   steps: LayoutExplanationStep[];
   totalDurationMs: number;
   summary: string;
@@ -362,20 +363,23 @@ export function layoutsDiffer(from: Layout, to: Layout): boolean {
 }
 const intent = (layout: Layout) => layout.description.trim().replace(/[.!]+$/, '');
 /** A deterministic explanation of preset differences, not an optimization or physical motion simulation. */
-export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType, goal?: LayoutGoal): LayoutExplanationPlan {
+export function buildLayoutExplanation(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType, goals: LayoutGoal[] = [], limits: string[] = []): LayoutExplanationPlan {
   const plan = explain(from, to, room, space);
-  return goal && (space ?? spaceOfLayouts(from, to)) === 'retail' ? withGoal(plan, from, to, room, goal) : plan;
+  if ((space ?? spaceOfLayouts(from, to)) !== 'retail') return plan;
+  const measured = goals.length ? withGoals(plan, from, to, room, [...new Set(goals)]) : plan;
+  return limits.length ? { ...measured, limits: [...new Set(limits)] } : measured;
 }
-function withGoal(plan: LayoutExplanationPlan, from: Layout, to: Layout, room: RoomSpec, goal: LayoutGoal): LayoutExplanationPlan {
-  const start = measureStore(from, room), end = measureStore(to, room);
+function withGoals(plan: LayoutExplanationPlan, from: Layout, to: Layout, room: RoomSpec, goals: LayoutGoal[]): LayoutExplanationPlan {
+  const aisles = [...new Set(goals.map(aisleFor))], measure = (layout: Layout) => new Map(aisles.map(aisle => [aisle, measureStore(layout, room, aisle)]));
+  const start = measure(from), end = measure(to), whys = (before: typeof start, after: typeof start) => goals.map(goal => ({ goal, label: GOALS[goal].label, text: goalReason(goal, before.get(aisleFor(goal))!, after.get(aisleFor(goal))!) }));
   let reached = from, measured = start;
   const steps = plan.steps.map(step => {
-    if (step.kind === 'finish') return { ...step, goalWhy: goalReason(goal, start, end) };
-    const next = completedStep(reached, step), after = measureStore(next, room), goalWhy = goalReason(goal, measured, after);
+    if (step.kind === 'finish') return { ...step, goalWhys: whys(start, end) };
+    const next = completedStep(reached, step), after = measure(next), goalWhys = whys(measured, after);
     reached = next; measured = after;
-    return { ...step, goalWhy };
+    return { ...step, goalWhys };
   });
-  return { ...plan, steps, goal: { id: goal, ...GOALS[goal], lines: goalLines(goal, start, end) }, warnings: [...plan.warnings, GOALS[goal].note] };
+  return { ...plan, steps, goals: goals.map(goal => ({ id: goal, ...GOALS[goal], lines: goalLines(goal, start.get(aisleFor(goal))!, end.get(aisleFor(goal))!) })), warnings: [...plan.warnings, ...goals.map(goal => GOALS[goal].note)] };
 }
 function explain(from: Layout, to: Layout, room: RoomSpec, space?: SpaceType): LayoutExplanationPlan {
   const before = itemMap(from), after = itemMap(to), steps: LayoutExplanationStep[] = [], warnings: string[] = [];

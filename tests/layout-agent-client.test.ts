@@ -21,7 +21,7 @@ describe('agent reply validation', () => {
 });
 
 /** The browser loop against a mocked endpoint. */
-const proposal = (extra: object) => ({ action: 'rearrange', goal: 'other', layoutId: '', name: 'Tucked', description: 'Stool tucked', reply: 'Moved it.', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '', ...extra });
+const proposal = (extra: object) => ({ action: 'rearrange', goal: 'other', goals: [], limits: '', layoutId: '', name: 'Tucked', description: 'Stool tucked', reply: 'Moved it.', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '', ...extra });
 const good = proposal({ moves: [{ itemId: 'stool', x: .2, z: -2.1, rotationDegrees: 0, reason: 'Out of the way.' }] });
 const bad = proposal({ moves: [{ itemId: 'sofa', x: 0, z: 0, rotationDegrees: 0, reason: 'Nope.' }] });
 const answer = (value: object, provider = 'LLM Foundry') => Response.json({ proposal: value, provider, model: 'gemini-test' });

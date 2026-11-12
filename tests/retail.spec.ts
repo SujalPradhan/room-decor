@@ -484,3 +484,22 @@ test('a sales request explains each change through sales measures, and each step
   await expect(panel.locator('.le-notes')).toContainText('not a sales forecast');
   expect(errors.filter(error => !error.includes('503'))).toEqual([]);
 });
+
+test('the agent reads several goals and a limit, and the walkthrough measures each and says what it could not', async ({ page }) => {
+  const errors = watchErrors(page);
+  const proposal = { action: 'use_layout', goal: 'other', goals: ['sales', 'access'], limits: 'Theft is not something a floor plan can measure.', layoutId: 'services-first', name: '', description: '', reply: 'Services first suits that best.', moves: [], removals: [], recolors: [], additions: [], wallColor: '', accentColor: '', colorReason: '' };
+  await page.route('**/api/layout-agent', r => r.fulfill({ json: { proposal, provider: 'LLM Foundry', model: 'test' } }));
+  await open(page, '/?space=retail', storeKey);
+  await page.getByRole('textbox', { name: 'Describe what you want from this store', exact: true }).fill('more sales, wheelchair friendly, and less shoplifting');
+  await page.getByRole('button', { name: 'Rearrange the store', exact: true }).click();
+  const panel = page.locator('.layout-explainer');
+  await page.getByRole('button', { name: 'Pause layout walkthrough', exact: true }).click();
+  await expect(panel.locator('.le-limits')).toContainText('Not measured');
+  await expect(panel.locator('.le-limits li')).toHaveText(['Theft is not something a floor plan can measure.']);
+  await expect(panel.locator('.le-goal-heading')).toHaveText(['Toward more sales', 'Toward step-free access']);
+  await expect(panel.locator('.le-current-step .le-why strong')).toContainText(['For sales', 'For access', 'Measured']);
+  await page.getByRole('button', { name: /^Go to step 2:/ }).click();
+  await expect(page.locator('#le-step-why-1 .le-why strong')).toContainText(['For sales', 'For access', 'Measured']);
+  await panel.screenshot({ path: `${SHOTS}/agent-goals-walkthrough.png` });
+  expect(errors).toEqual([]);
+});

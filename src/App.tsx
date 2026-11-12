@@ -89,6 +89,7 @@ import {useLayoutWalkthrough} from "./useLayoutWalkthrough";
 import {matchLayoutIntent} from "./layout-intent";
 import type {LayoutAgentResult} from "./layout-agent-types";
 import {askLayoutAgent,LayoutAgentHttpError,readLayoutAgentResult} from "./layout-agent-client";
+import type {LayoutGoal} from "./layout-goals";
 import { useProductStudio } from "./useProductStudio";
 import { productToFurniture, generatedProductToFurniture, isSafeProductImageUrl } from "./product-domain";
 import { chooseProductPosition, placeProduct, readPlacementIntents, WALL_KINDS, type ProductPlacementIntent } from "./automatic-products";
@@ -513,13 +514,13 @@ export default function App() {
   const presenting=Boolean(walkthrough.view&&!walkthrough.view.finished);
   const [layoutRequest,setLayoutRequest]=useState(''),[layoutReply,setLayoutReply]=useState<LayoutAgentReply|null>(null),agentInput=useRef<HTMLInputElement>(null),[agentBusy,setAgentBusy]=useState(false);
   const agentAbort=useRef<AbortController|null>(null),movedOn=useRef(false),[agentAttempt,setAgentAttempt]=useState(1);
-  const startPreset=(targetId:string,request?:string,byAgent=false)=>{
+  const startPreset=(targetId:string,request?:string,byAgent=false,reading?:{goals?:LayoutGoal[];limits?:string})=>{
     const current=projectRef.current,target=current.layouts.find(l=>l.id===targetId);
     if(!target||(!presenting&&current.activeLayoutId===targetId))return;
     if(presenting&&walkthrough.view?.plan.toId===targetId)return;
     const snapshot=walkthrough.snapshot(),from=snapshot&&presenting?{...snapshot,id:'current-view',name:'Current view'}:current.layouts.find(l=>l.id===current.activeLayoutId)!;
     setProductPreview(null);setReplacementDraft(null);setProductOpen(false);setCostOpen(false);setModal(null);setExportOpen(false);setSelectedId(null);setMobilePanel(null);if(mode==='walk')setMode('orbit');
-    walkthrough.start(from,target,current.room,request,undefined,byAgent,spaceOf(current));
+    walkthrough.start(from,target,current.room,request,undefined,byAgent,spaceOf(current),reading);
   };
   const useRules=(request:string,note='Keyword rules')=>{
     const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room,spaceOf(current));
@@ -610,11 +611,11 @@ export default function App() {
     if(stale()){movedAway();return;}
     const current=projectRef.current,from=current.layouts.find(l=>l.id===current.activeLayoutId)!;
     setLayoutReply({text:result.reply,meta:`${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`});
-    if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request,true);
+    if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request,true,result);
     if(result.action==='rearrange'){
       agentLayout.current=result.layout;
       setSelectedId(null);setMobilePanel(null);setExportOpen(false);
-      walkthrough.start(from,result.layout,current.room,request,result.reasons,true,spaceOf(current));
+      walkthrough.start(from,result.layout,current.room,request,result.reasons,true,spaceOf(current),result);
     }
   };
   const deleteLayout=(id:string)=>{

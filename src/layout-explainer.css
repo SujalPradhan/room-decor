@@ -121,3 +121,8 @@
 .le-goal-heading { display:block; color:var(--gold,#dabe89); font-size:10px; font-weight:600; letter-spacing:.04em; }
 .le-current-step .le-goal p.le-floor { margin-top:6px; padding-top:0; border-top:0; }
 @media (prefers-reduced-motion: reduce) { .le-step-chevron { transition:none; } }
+.le-limits { margin:0; padding:9px 11px; background:#ffffff08; border:1px solid #ffffff14; border-radius:9px; color:#c3c9b9; font-size:11px; line-height:1.55; }
+.le-limits strong { color:#e3cda4; font-size:10px; font-weight:600; letter-spacing:.04em; }
+.le-limits ul { margin:4px 0 0; padding-left:15px; }
+.le-limits li { overflow-wrap:anywhere; }
+.le-limits li+li { margin-top:3px; }

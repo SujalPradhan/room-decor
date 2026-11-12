@@ -1,7 +1,7 @@
 import { parseProject, serializeProject } from './domain';
 import { layoutsDiffer } from './layout-explainer';
 import { AgentReplyError, judgeProposal, prepareSituation, runAgentLoop, type AgentLoop, type Verdict } from './layout-agent-core';
-import { readProposal, type AgentAnswer, type AgentPrevious, type AgentSituation, type Proposal } from './layout-agent-prompt';
+import { LAYOUT_GOALS, readProposal, type AgentAnswer, type AgentPrevious, type AgentSituation, type Proposal } from './layout-agent-prompt';
 import type { LayoutAgentResult } from './layout-agent-types';
 import type { Project } from './types';
 import ChecksWorker from './layout-agent-worker.ts?worker';
@@ -11,6 +11,8 @@ export function readLayoutAgentResult(value: unknown, project: Project): LayoutA
   if (!value || typeof value !== 'object') throw new Error('Unreadable agent reply.');
   const result = value as LayoutAgentResult;
   if (typeof result.reply !== 'string' || !result.reply.trim() || typeof result.model !== 'string' || typeof result.provider !== 'string' || !Number.isFinite(result.elapsedMs)) throw new Error('Incomplete agent reply.');
+  if (result.goals !== undefined && (!Array.isArray(result.goals) || result.goals.some(goal => !LAYOUT_GOALS.includes(goal)))) throw new Error('Invalid agent goals.');
+  if (result.limits !== undefined && typeof result.limits !== 'string') throw new Error('Invalid agent limits.');
   if (result.action === 'decline') return result;
   if (result.action === 'use_layout') {
     if (!project.layouts.some(layout => layout.id === result.layoutId)) throw new Error('Unknown saved layout.');
