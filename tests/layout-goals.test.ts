@@ -163,48 +163,50 @@ describe('the short why on every step', () => {
     buildLayoutExplanation(project.layouts[0], project.layouts[1], project.room, 'retail', ['find', 'access']),
     buildLayoutExplanation(home.layouts[0], home.layouts[1], home.room),
   ];
-  it('is on every step and short enough to read at a glance', () => {
+  it('is one short sentence on every step', () => {
     for (const plan of switches) for (const step of plan.steps) {
       expect(step.short, step.title).toBeDefined();
-      expect(step.short!.text.split(/\s+/).length, step.short!.text).toBeLessThanOrEqual(6);
+      expect(step.short!.text.split(/\s+/).length, step.short!.text).toBeLessThanOrEqual(16);
+      expect(step.short!.text, step.title).toMatch(/^[A-Z].*[.]$/);
     }
   });
   it('marks a cost as a trade-off, never as a why', () => {
     const shorts = switches.flatMap(plan => plan.steps.map(step => step.short!));
-    for (const short of shorts) expect(/fewer|less|further|Uses|Blocks/.test(short.text), short.text).toBe(Boolean(short.tradeOff));
+    for (const short of shorts) expect(/^(Takes|Removes|Blocks|Moves|Leaves)|out of reach/.test(short.text), short.text).toBe(Boolean(short.tradeOff));
   });
   it('agrees with the measured why it summarises', () => {
     for (const plan of switches.slice(0, 4)) for (const step of plan.steps.filter(item => item.kind !== 'finish')) {
       const text = step.short!.text;
       if (text.startsWith('Opens')) expect(step.why).toContain('Opens');
       if (text.startsWith('Clears')) expect(step.why).toContain('Clears');
-      if (/closer|near checkout|walking room|within reach/.test(text)) expect(step.why).toMatch(/Shortens|Puts|Adds|Opens a 1.2 m aisle/);
+      if (/closer|on the way to checkout|walking room|within reach/.test(text)) expect(step.why).toMatch(/Shortens|Puts|Adds|Opens a 1.2 m aisle/);
     }
   });
   it('follows the goal asked for, and gives a store reason when floor is not the reason', () => {
     const sales = switches[4], noGoal = switches[0];
-    expect(sales.steps.some(step => /near checkout|within reach|Products/.test(step.short!.text))).toBe(true);
+    expect(sales.steps.some(step => /checkout|within reach|products/.test(step.short!.text))).toBe(true);
     expect(sales.steps.some(step => /m² of floor/.test(step.short!.text) && !step.short!.tradeOff && step.short!.text.startsWith('Opens'))).toBe(false);
-    expect(noGoal.steps.find(step => step.title.includes('fragrance towers'))!.short).toEqual({ text: 'Products 0.3 m closer' });
+    expect(noGoal.steps.find(step => step.title.includes('fragrance towers'))!.short).toEqual({ text: 'Brings products 0.3 m closer to the door, so shoppers find them sooner.' });
   });
 });
 
 describe("the agent's own short why", () => {
   const change = { action: 'rearrange', goal: 'other', layoutId: '', name: 'Launch', description: 'Launch', reply: 'Done.', moves: [], removals: [], additions: [], wallColor: '#f1e4e0', accentColor: '', colorReason: 'Warmer for the launch.' };
-  it('is asked of the store agent only, and kept to six words', async () => {
+  it('is asked of the store agent only, as one sentence of at most fifteen words', async () => {
     const { SYSTEM } = await import('../src/layout-agent-prompt');
-    expect(SYSTEM.retail).toContain('three to five plain words');
+    expect(SYSTEM.retail).toContain('one plain sentence of at most 12 words');
     expect(SYSTEM.retail).toContain('"why":""');
     expect(SYSTEM.room).not.toContain('"why"');
     const read = readProposal({ ...change, recolors: [{ itemId: 'a', color: '#ffffff', reason: 'r', why: '  frames   the launch entrance for every shopper today ' }], colorWhy: '' });
-    expect(read.recolors[0].why).toBe('frames the launch entrance for every');
+    expect(read.recolors[0].why).toBe('frames the launch entrance for every shopper today.');
+    expect(readProposal({ ...change, recolors: [{ itemId: 'a', color: '#ffffff', reason: 'r', why: Array.from({ length: 20 }, (_, i) => `w${i}`).join(' ') }] }).recolors[0].why).toBe(`${Array.from({ length: 15 }, (_, i) => `w${i}`).join(' ')}…`);
     expect(read).not.toHaveProperty('colorWhy');
   });
   it('reaches the step of the piece it is about, and a group step takes the most common one', () => {
     const project = createRetailProject(), table = project.layouts[0].items.find(item => item.kind === 'display-table')!;
     const proposal = readProposal({ ...change, recolors: [{ itemId: table.id, color: '#ffffff', reason: 'Brighter.', why: 'Spotlights the new arrivals' }], colorWhy: 'Warms the launch mood' });
     const outcome = judgeProposal(project, 'adjust layout for a new product opening', proposal).outcome!;
-    expect(outcome).toMatchObject({ shorts: { [table.id]: 'Spotlights the new arrivals', finish: 'Warms the launch mood' } });
+    expect(outcome).toMatchObject({ shorts: { [table.id]: 'Spotlights the new arrivals.', finish: 'Warms the launch mood.' } });
     const step = { id: 's', kind: 'move', title: 't', description: '', durationMs: 1, itemId: 'a', parts: [{ itemId: 'a' }, { itemId: 'b' }, { itemId: 'c' }] } as LayoutExplanationStep;
     expect(agentShortFor(step, { a: 'Frames the entrance', b: 'Clears the aisle', c: 'Clears the aisle' })).toBe('Clears the aisle');
     expect(agentShortFor(step, { a: 'Frames the entrance', b: 'Clears the aisle' })).toBe('Frames the entrance');

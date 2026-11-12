@@ -154,18 +154,18 @@ function stepReason(step: LayoutExplanationStep, floorBefore: number, floorAfter
   return step.kind === 'move' ? `Leaves the largest open area as it is; this is where ${targetName} puts it.` : 'Leaves the largest open area as it is.';
 }
 
-const FINAL = 'Part of the final layout';
+const FINAL = 'Needed for the final layout; no measured change on its own.';
 const tenth = (value: number) => Number(value.toFixed(1)).toString();
 function shortReason(floorBefore: number, floorAfter: number, issuesBefore: number, issuesAfter: number): StepShort {
   const change = floorAfter - floorBefore, cleared = issuesBefore - issuesAfter;
-  if (change >= .05) return { text: `Opens ${tenth(change)} m² of floor` };
-  if (cleared > 0) return { text: `Clears ${count(cleared)} crowded ${cleared === 1 ? 'spot' : 'spots'}` };
-  if (change <= -.05) return { text: `Uses ${tenth(-change)} m² of floor`, tradeOff: true };
+  if (change >= .05) return { text: `Opens ${tenth(change)} m² of floor so people move freely.` };
+  if (cleared > 0) return { text: `Clears ${count(cleared)} crowded ${cleared === 1 ? 'spot' : 'spots'} where pieces sat too close.` };
+  if (change <= -.05) return { text: `Takes ${tenth(-change)} m² of open floor to fit the final layout.`, tradeOff: true };
   return { text: FINAL };
 }
 function finishShort(startFloor: number, endFloor: number, coloured: boolean): StepShort {
-  if (coloured) return { text: 'New colours, nothing moves' };
-  return endFloor - startFloor >= .05 ? { text: `Opens ${tenth(endFloor - startFloor)} m² overall` } : { text: 'Shows the finished layout' };
+  if (coloured) return { text: 'Applies the new colours; nothing moves.' };
+  return endFloor - startFloor >= .05 ? { text: `Opens ${tenth(endFloor - startFloor)} m² of floor overall.` } : { text: 'Shows the finished layout.' };
 }
 
 const GREEDY_STEPS = 12, RANK_CELL = .1;

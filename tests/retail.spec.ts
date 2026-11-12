@@ -516,7 +516,7 @@ test("each step row shows the agent's own short why without a click", async ({ p
   await page.getByRole('button', { name: 'Rearrange the store', exact: true }).click();
   await page.getByRole('button', { name: 'Pause layout walkthrough', exact: true }).click();
   const rows = page.locator('.le-step-list li');
-  await expect(rows.first().locator('.le-step-short')).toHaveText('Why Spotlights the new product');
+  await expect(rows.first().locator('.le-step-short')).toHaveText('Why Spotlights the new product.');
   await expect(rows.first().locator('[aria-expanded]')).toHaveAttribute('aria-expanded', 'false');
   await page.locator('.le-step-list').screenshot({ path: `${SHOTS}/agent-short-why.png` });
   expect(errors).toEqual([]);
