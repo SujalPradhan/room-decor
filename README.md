@@ -13,9 +13,22 @@ npm ci
 npm run laptop
 ```
 
-The launcher opens `http://127.0.0.1:5174` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 22.12 or later is required. The local launcher runs the same editor on your laptop.
+The launcher opens `http://127.0.0.1:5176` and keeps the local server in its terminal window. Press Ctrl+C there to stop it. Node.js 24 (or 22.13 or later) is required. The local launcher runs the same editor on your laptop.
 
-## Replace a piece
+## Product links and processing history
+
+Choose **Add furniture → Try a product link**, or select a piece and choose **Have a product link?** Paste a complete supported Amazon India or Flipkart URL. Processing starts automatically after a brief pause: collect photos and dimensions → Foundry evidence review → local TripoSR/Blender → add the actual generated GLB to the intended room layout, or replace the selected piece. There is no required category selection, dimension checkbox, upload, Generate click or final confirmation. The insertion/replacement is one undoable change, and Original is preserved. **Advanced** controls remain optional.
+
+Sign in once for the platform's private model queue and assets; a pasted link resumes after sign-in. Compatible ready models from the signed-in account's library can be reused instead of generating again. **My products** retains source evidence, model and history. Category or size edits preserve ready geometry; changing product identity, variant or reference images invalidates it. Missing measurements stay unknown: a separate estimated display size makes the model visible without claiming verified fit.
+**Cost & time** records instrumented work, actual returned tokens, image count, engine/provider/model and observed stage/elapsed times, with filters and CSV export. Foundry monetary cost remains **unknown** until reconciled against account usage and pricing. Existing assets have no reconstructed billing history. Local 3D reconstruction has no external 3D API fee; device, electricity and hosting/storage costs are unmetered.
+
+**Paid Meshy generation remains source-disabled**, including at the server. Foundry evidence review uses the configured LLM account token and may incur account charges. No direct-provider price is assumed. The public app supports device-local editing without an account; sign in for the private product library, uploads, model queue and results. Room layouts remain device-local, and product/cost history is separate from layout undo. Keep original GLBs when transferring projects between browsers.
+
+Install the Mac background generator once using the [autogenerator service guide](docs/AUTOMATIC_GENERATOR_SERVICE.md). Its LaunchAgent starts the outgoing-only worker at login; ordinary use needs no manual terminal. The Mac must remain available and awake/reachable. Sleep prevention covers active jobs only. There is no inbound laptop port. Foundry credentials stay on the Mac; the site needs only the shared worker credential for this pipeline alongside private job/asset storage. Server limits allow one active job per person, three attempts per person and six globally per UTC day, and one running reconstruction globally. Failed/cancelled attempts count. Cancellation, leases, account-scoped placement intent and revision checks protect against stale results. The bounded **Start Roomshift Generator.command** remains an optional manual launcher.
+
+On 29 October 2026, the supplied Flipkart recliner completed the earlier localhost pipeline in 33.83 seconds, including Foundry and local 3D processing. That run used the earlier manual UI; real end-to-end validation of the new automatic paste-to-room interaction is pending. Only this recliner has been validated with live reconstruction; Amazon links and other categories are best-effort and unbenchmarked. [Pipeline and limits](docs/AUTOMATIC_PRODUCT_PIPELINE.md), [Foundry evidence/metering](docs/FOUNDRY_INTEGRATION.md), [local setup and quality limits](docs/RECLINER_EXPERIMENT.md).
+
+## Optional manual replacement
 
 1. Select furniture in the room or inventory and choose **Try a replacement**.
 2. Choose a detailed library model or **Bring your own 3D model** using a GLB from Blender, a scan or another 3D tool.
@@ -55,18 +68,18 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-For the development server on 5174:
+For the development server on 5176:
 
 ```sh
-ROOMSHIFT_BASE_URL=http://127.0.0.1:5174 npm run test:e2e
+ROOMSHIFT_BASE_URL=http://127.0.0.1:5176 npm run test:e2e
 ```
 
 The Blender rebuild validates 14 roots, portable maps, UVs, normalized bounds and floor pivots. The local editable source is retained under ignored `artifacts/furniture-realistic.blend`; the build script recreates it. [Laptop validation](docs/LAPTOP_VALIDATION.md), [first-release and POCO validation](docs/VALIDATION.md).
 
 The interface follows the visual direction of [Dream Room](https://github.com/Jivraj-18/dream-room-blender); application code and furniture are independently authored. Runtime dependencies include React, Three.js and Lucide under their respective open-source licenses. Generic Poly Haven maps are CC0; authored materials are recorded with the assets.
 
-## Stable checkpoint and proposed next work
+## Stable checkpoint and product-link work
 
 [PR #7](https://github.com/SujalPradhan/room-decor/pull/7) merged the current realistic editor into `main`. The annotated tag [`roomshift-stable-2026-10-28`](https://github.com/SujalPradhan/room-decor/tree/roomshift-stable-2026-10-28) preserves the application deployed as public version 3 (source commit `e422ba5`). Retain the tag when implementing later features.
 
-The proposed next release adds product-link intake, reviewed product dimensions, detailed model generation, and a Cost & time tab. Implementation awaits plan review. [Full proposal](docs/PRODUCT_LINK_PLAN.md), [tracking issue #8](https://github.com/SujalPradhan/room-decor/issues/8).
+Product-link intake, reviewed dimensions, My products and Cost & time are implemented. The laptop-worker model pilot is implemented and locally validated. [Original proposal](docs/PRODUCT_LINK_PLAN.md), [current pipeline](docs/AUTOMATIC_PRODUCT_PIPELINE.md), [tracking issue #8](https://github.com/SujalPradhan/room-decor/issues/8).

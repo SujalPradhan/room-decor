@@ -1,0 +1,20 @@
+import {describe,it,expect,vi,afterEach} from 'vitest';
+import {readFileSync} from 'node:fs';
+import {fetchRetailerPage,resolveProduct,extractProductMetadata} from '../server/retailers';
+import {createProductDraft,validateProductDraft} from '../src/product-domain';
+import {validateOperationRecord} from '../src/ledger';
+import type {ProductResolveResult} from '../src/product-types';
+import {handleStudioRequest} from '../server/studio';
+afterEach(()=>vi.unstubAllGlobals());
+import {flipkartSpecifications} from '../server/flipkart-state';
+const html=readFileSync(new URL('./fixtures/flipkart-recliner.html',import.meta.url),'utf8');
+const url='https://www.flipkart.com/snuzspace-fabric-manual-recliner/p/itmcbf4f034af5ba?pid=RECHK8KJZEVZWK37';
+describe('real Flipkart recliner extraction',()=>{
+ it('returns product and metering data accepted by the actual client contract',async()=>{vi.stubGlobal('fetch',async()=>new Response(html,{headers:{'Content-Type':'text/html'}}));const response=await handleStudioRequest(new Request('https://roomshift.test/api/products/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,roomId:'r'})}),{});const result=await response.json() as ProductResolveResult;expect(response.status).toBe(200);expect(validateProductDraft(result.product).images).toHaveLength(5);expect(validateOperationRecord(result.operation).status).toBe('succeeded');expect(result.operation.cost.amountMicros).toBeUndefined();const legacy=structuredClone(result.operation);legacy.cost.amountMicros=0;expect(validateOperationRecord(legacy).cost.amountMicros).toBeUndefined();expect(legacy.cost.amountMicros).toBe(0);});
+ it('reads a 1.5MB storefront despite a reCAPTCHA configuration flag',async()=>{const body=html+' '.repeat(1_510_000);const page=await fetchRetailerPage(url,async()=>new Response(body,{headers:{'Content-Type':'text/html'}}));expect(page.html).toBe(body);});
+ it('extracts this exact product, five images, variant and outer axes',async()=>{const {product,notice}=await resolveProduct({url,roomId:'test'},async()=>new Response(html,{headers:{"Content-Type":"text/html"}}));expect(notice).toBeUndefined();expect(product.title).toBe('SNUZSPACE Fabric Manual Recliner');expect(product.images).toHaveLength(5);expect(product.variant).toContain('ReclinerM-Pinnacle-B');expect(product.variant).toContain('Brown');expect(product.kind).toBe('chair');expect(Object.fromEntries(Object.entries(product.dimensions).map(([a,m])=>[a,m.metres]))).toEqual({width:.8356,depth:.8255,height:1.09});expect(product.dimensions.height.evidence).toContain('109 cm');expect(product.dimensions.height.confirmed).toBe(false);});
+ it('does not mistake seat height or shipping boxes for assembled size',()=>{expect(flipkartSpecifications(html.replace('"Dimensions"','"Shipping Dimensions"'),'RECHK8KJZEVZWK37').measurements).toEqual([]);});
+ it('ignores another product variant and never evaluates script',()=>{expect(flipkartSpecifications(html,'OTHER')).toEqual({measurements:[],variant:''});expect(flipkartSpecifications('<script>window.__INITIAL_STATE__ = {a: (()=>{throw Error()})()};</script>','x').measurements).toEqual([]);});
+ it('rejects actual challenges and still enforces the bounded body',async()=>{await expect(fetchRetailerPage(url,async()=>new Response('<title>Robot check</title><form>Enter captcha</form>'))).rejects.toThrow();await expect(fetchRetailerPage(url,async()=>new Response('x'.repeat(3_000_001)))).rejects.toThrow();});
+ it('does not accept product dimensions embedded in unrelated plain text',()=>{const p=createProductDraft('r',{retailer:'flipkart',productId:'RECHK8KJZEVZWK37'});const extracted=extractProductMetadata('<p>Seat Height: 99cm</p>',p);expect(extracted.dimensions.height.metres).toBeNull();});
+});

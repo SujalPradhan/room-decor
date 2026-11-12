@@ -1,0 +1,90 @@
+{
+  "source": "https://www.flipkart.com/snuzspace-fabric-manual-recliner/p/itmcbf4f034af5ba?pid=RECHK8KJZEVZWK37",
+  "title": "SNUZSPACE Fabric Manual Recliner",
+  "variant": "Brown · ReclinerM-Pinnacle-B",
+  "listedDimensions": {
+    "width": {
+      "metres": 0.8356,
+      "origin": "listing",
+      "evidence": "Width: 83.56 cm",
+      "confirmed": false
+    },
+    "depth": {
+      "metres": 0.8255,
+      "origin": "listing",
+      "evidence": "Depth: 82.55 cm",
+      "confirmed": false
+    },
+    "height": {
+      "metres": 1.09,
+      "origin": "listing",
+      "evidence": "Height: 109 cm",
+      "confirmed": false
+    }
+  },
+  "images": 5,
+  "model": "stabilityai/TripoSR",
+  "device": "mps",
+  "modelSourceCommit": "107cefdc244c39106fa830359024f6a2f1c78871",
+  "inference": [
+    {
+      "stage": "image-preparation",
+      "seconds": 0.222
+    },
+    {
+      "stage": "load-model-and-weights",
+      "seconds": 3.82
+    },
+    {
+      "stage": "image-to-3d-inference",
+      "seconds": 2.425
+    },
+    {
+      "stage": "mesh-extraction-and-export",
+      "seconds": 7.579
+    }
+  ],
+  "conversion": {
+    "rawOrientedBoundsMetres": [
+      0.7819488644599915,
+      0.9684213399887085,
+      0.8726241588592529
+    ],
+    "targetListingDimensionsMetres": {
+      "width": 0.8356,
+      "depth": 0.8255,
+      "height": 1.09
+    },
+    "blenderDimensionsMetres": [
+      0.8355934619903564,
+      0.8254948258399963,
+      1.0900232791900635
+    ],
+    "axisScalingRatio": 1.465367444899394,
+    "geometryWarnings": [
+      "Listing-axis scaling changes inferred proportions substantially; verify appearance and fit."
+    ],
+    "faces": 70000,
+    "textureSize": 1024,
+    "colorSpace": "TripoSR sRGB converted to linear vertex colors before texture baking",
+    "fileBytes": 2944940,
+    "conversionSeconds": 0.8879365829925518,
+    "orientation": "TSR Z-up corrected; chair front estimated from upper-back versus seat centroids; visual validation required",
+    "inferredYawDegrees": 248.47620627916916,
+    "note": "Dimensions follow retailer table. Hidden surfaces and colors are inferred."
+  },
+  "totalSeconds": 23.129668208,
+  "validation": {
+    "nodeCount": 1,
+    "meshCount": 1
+  },
+  "embeddedTextures": 1,
+  "sha256": "36357202753e8828a37826d6e961caad26d394e950b52b423ea5034a77b77b18",
+  "providerCalls": 0,
+  "notes": [
+    "Actual single-command local run; no manually authored geometry.",
+    "Photo/diagram width differs slightly from specification table.",
+    "Single-image output has smoothed details and inferred hidden geometry.",
+    "Pipeline is local; public site generation remains disabled."
+  ]
+}

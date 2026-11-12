@@ -123,6 +123,38 @@ h2 {
   color: #84937f;
   padding: 2px 5px;
 }
+.space-switch {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  border: 1px solid #ffffff1c;
+  border-radius: 6px;
+  padding: 3px;
+  margin-left: -24px;
+}
+.space-switch button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #a7b49e;
+  white-space: nowrap;
+}
+.space-switch button.active {
+  background: var(--gold);
+  color: #283024;
+}
+.space-switch button:hover:not(.active) {
+  color: #ece9dd;
+  background: #ffffff0a;
+}
+.space-switch button:focus-visible {
+  outline: 2px solid #ece9dd;
+  outline-offset: 1px;
+}
 .header-actions {
   margin-left: auto;
   display: flex;
@@ -1211,6 +1243,28 @@ h2 {
   transform: rotate(-14deg) skewY(6deg);
   overflow: hidden;
 }
+.mini-plan-inner.store-floor {
+  background: repeating-conic-gradient(#e7e0d6 0% 25%, #e0d8cc 0% 50%) 0 0 / 8px 8px;
+  border-color: #d8cfc1;
+}
+/* A flagship holds dozens of small fixtures, so store thumbnails drop the per-piece borders and shadows. */
+.store-floor .mini-item {
+  border: 0;
+  box-shadow: none;
+  min-width: 1.5px;
+  min-height: 1.5px;
+}
+.store-floor .mini-fragrance-tower,
+.store-floor .mini-hero-plinth {
+  border-radius: 50%;
+}
+.store-floor .mini-service-cabin {
+  outline: 1px solid #0003;
+  outline-offset: -1px;
+}
+.store-floor .mini-digital-wall {
+  background-color: #2a2730 !important;
+}
 .mini-item {
   position: absolute;
   display: block;
@@ -1401,6 +1455,30 @@ h2 {
   justify-content: center;
   padding: 30px;
   overflow: auto;
+}
+.space-prompt-backdrop {
+  z-index: 1100;
+}
+.space-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.replacement-empty {
+  border: 1px dashed #ffffff2e;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.replacement-empty strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.replacement-empty p {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
 }
 .modal {
   position: relative;
@@ -1919,6 +1997,15 @@ h2 {
     width: 24px;
   }
   .breadcrumb {
+    display: none;
+  }
+  .space-switch {
+    margin-left: 0;
+  }
+  .space-switch button {
+    padding: 6px 7px;
+  }
+  .space-switch button span {
     display: none;
   }
   .header-actions {
@@ -2852,4 +2939,135 @@ h2 {
 }
 .object-actions .delete-object:hover {
   color: #f0b29c;
+}
+@media (max-width: 430px) {
+  .brand > span {
+    display: none;
+  }
+}
+
+/* Collapsible side panel and layout strip. Phones keep the drawer and full strip. */
+.panel-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.panel-rail,
+.panel-collapse,
+.layout-pills {
+  display: none;
+}
+.layouts-section {
+  position: relative;
+}
+.layouts-toggle {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+}
+@media (min-width: 701px) {
+  .layout-cards {
+    margin-right: 22px;
+  }
+}
+@media (min-width: 701px) {
+  .panel-collapse {
+    display: inline-flex;
+    margin: -4px -6px 0 0;
+  }
+  .left-collapsed .workspace {
+    grid-template-columns: 52px minmax(0, 1fr) 266px;
+  }
+  .left-collapsed .inventory-panel {
+    padding: 16px 0 0;
+    align-items: center;
+  }
+  .left-collapsed .panel-content {
+    display: none;
+  }
+  .left-collapsed .panel-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 8px;
+    border-radius: 6px;
+    color: #a4b09e;
+    font-size: 10px;
+    letter-spacing: 0.03em;
+  }
+  .left-collapsed .panel-rail:hover,
+  .left-collapsed .panel-rail:focus-visible {
+    background: #ffffff09;
+    color: #f2ebdf;
+  }
+  .layouts-collapsed .workspace {
+    height: calc(100svh - 179px);
+  }
+  .layouts-collapsed .layouts-section {
+    min-height: 0;
+    padding: 9px 56px 9px 30px;
+  }
+  .layouts-collapsed .layouts-intro,
+  .layouts-collapsed .layout-cards {
+    display: none;
+  }
+  .layouts-collapsed .layouts-toggle {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .layouts-collapsed .layout-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .layout-pills .eyebrow {
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+  .layout-pills button {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: #c9d0c2;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .layout-pills button:hover:not(:disabled) {
+    border-color: #a8b59f;
+    color: #f2ebdf;
+  }
+  .layout-pills button.active {
+    background: var(--gold, #d8b97c);
+    border-color: transparent;
+    color: #1d2520;
+  }
+  .layout-pills button:disabled {
+    opacity: 0.55;
+  }
+}
+@media (min-width: 701px) and (max-width: 1200px) {
+  .left-collapsed .workspace {
+    grid-template-columns: 52px minmax(0, 1fr) 235px;
+  }
+}
+@media (min-width: 1100px) {
+  .left-collapsed .workspace {
+    grid-template-columns: 52px minmax(0, 1fr) 310px;
+  }
+}
+@media (min-width: 701px) and (max-width: 1000px) {
+  .left-collapsed .workspace {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .layouts-toggle {
+    display: none;
+  }
 }

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const url = "http://127.0.0.1:5174";
+const url = "http://127.0.0.1:5176";
 const vite = join(root, "node_modules/vite/bin/vite.js");
 if (!existsSync(vite)) {
   console.log("Installing Roomshift dependencies…");
@@ -28,7 +28,7 @@ try {
 } catch {}
 const child = spawn(
   process.execPath,
-  [vite, "--host", "127.0.0.1", "--port", "5174", "--strictPort"],
+  [join(root, "scripts/run-framework.mjs"), "dev", "--port", "5176"],
   { cwd: root, stdio: "inherit" },
 );
 const timer = setInterval(async () => {
