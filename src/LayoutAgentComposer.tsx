@@ -2,7 +2,7 @@ import { ArrowUp, Loader2, Sparkles, Square, X } from 'lucide-react';
 import { forwardRef, useEffect, useRef, useImperativeHandle, useState, type FormEvent } from 'react';
 import type { SpaceType } from './types';
 
-export interface LayoutAgentReply { text: string; meta?: string }
+export interface LayoutAgentReply { text: string; meta?: string; how?: boolean }
 export interface LayoutAgentComposerProps {
   value: string;
   busy: boolean;
@@ -39,7 +39,7 @@ const LayoutAgentComposer = forwardRef<HTMLInputElement, LayoutAgentComposerProp
   return <form className="layout-prompt" onSubmit={submit} hidden={hidden} aria-label={place === 'store' ? 'Store agent' : 'Room agent'}>
     <div className="lp-live" aria-live="polite">
       {busy ? <div className="lp-card"><p className="lp-reply is-busy"><Loader2 size={14} className="lp-spin" aria-hidden /> <span>{slow ? 'This is taking longer than usual…' : `Working out the ${place}…`}{attempt > 1 ? <small>Try {attempt} of 3 · fixing what the {place} checks found</small> : slow && <small>Stop any time, or wait a few more seconds.</small>}</span></p><button type="button" className="lp-stop" aria-label={`Stop the ${place} agent`} onClick={() => { onStop(); input.current?.focus(); }}><Square size={10} /> Stop</button></div>
-        : reply && <div className="lp-card"><p className="lp-reply">{reply.text}{reply.meta && <small>{reply.meta}</small>}</p><button type="button" className="lp-dismiss" aria-label="Dismiss agent reply" onClick={() => { onDismiss(); input.current?.focus(); }}><X size={14} /></button></div>}
+        : reply && <div className="lp-card"><p className="lp-reply">{reply.text}{(reply.meta || reply.how) && <small>{reply.meta}{reply.meta && reply.how && ' · '}{reply.how && <a className="lp-how" href="/how" target="_blank" rel="noopener">How the agent did this</a>}</small>}</p><button type="button" className="lp-dismiss" aria-label="Dismiss agent reply" onClick={() => { onDismiss(); input.current?.focus(); }}><X size={14} /></button></div>}
     </div>
     {!busy && !value && <div className="lp-suggestions">
       {[...suggestions, ...(canReset ? ['Back to the original'] : [])].map(text => <button key={text} type="button" disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => { onChange(text); onAsk(text); }}>{text}</button>)}

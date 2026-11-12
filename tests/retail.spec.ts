@@ -521,3 +521,42 @@ test("each step row shows the agent's own short why without a click", async ({ p
   await page.locator('.le-step-list').screenshot({ path: `${SHOTS}/agent-short-why.png` });
   expect(errors).toEqual([]);
 });
+
+test('the how page walks through the agent’s steps with the facts of the latest request', async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page, '/?space=retail', storeKey);
+  const tables = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!).layouts[0].items.filter((i: { kind: string }) => i.kind === 'display-table').slice(0, 2).map((i: { id: string }) => i.id), storeKey);
+  const base = { action: 'rearrange', goal: 'other', goals: ['sales'], limits: 'Footfall figures are not connected.', layoutId: '', name: 'Launch', description: 'Ready for the opening', reply: 'Brightened the arrival tables for the launch.', moves: [], removals: [], additions: [], wallColor: '', accentColor: '', colorReason: '' };
+  const replies = [
+    { ...base, recolors: [{ itemId: 'no-such-piece', color: '#ffffff', reason: 'x', why: 'x' }] },
+    { ...base, recolors: tables.map((itemId: string) => ({ itemId, color: '#ffffff', reason: 'White tables make the new product stand out.', why: 'Spotlights the new product' })) },
+  ];
+  await page.route('**/api/layout-agent', r => r.fulfill({ json: { proposal: replies.shift(), provider: 'LLM Foundry', model: 'test-model' } }));
+  await page.getByRole('textbox', { name: 'Describe what you want from this store', exact: true }).fill('adjust layout for a new product opening to sell more');
+  await page.getByRole('button', { name: 'Rearrange the store', exact: true }).click();
+  await page.getByRole('button', { name: 'Pause layout walkthrough', exact: true }).click();
+  const [how] = await Promise.all([page.waitForEvent('popup'), page.locator('.layout-explainer').getByRole('link', { name: 'How the agent did this' }).click()]);
+  await how.setViewportSize({ width: 900, height: 1400 });
+  await expect(how.getByRole('heading', { level: 1 })).toHaveText('How the agent turns a request into a layout');
+  await expect(how.getByRole('heading', { level: 2 })).toHaveCount(5);
+  await expect(how.locator('.hp-quote')).toHaveText('“adjust layout for a new product opening to sell more”');
+  await expect(how.locator('.hp-chip')).toHaveText(['more sales']);
+  await expect(how.locator('.hp-limit')).toContainText('Footfall figures are not connected.');
+  await expect(how.locator('.hp-run').nth(1)).toContainText('20 × 28 m store · 62 pieces · 5 saved layouts');
+  await expect(how.locator('.hp-run').nth(2)).toContainText('test-model via LLM Foundry');
+  await expect(how.locator('.hp-attempt.is-rejected')).toContainText('Try 1 sent back: Unknown piece "no-such-piece".');
+  await expect(how.locator('.hp-attempt.is-passed')).toContainText('Try 2 passed: 2 changes cleared the checks.');
+  await expect.poll(() => how.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await how.screenshot({ path: `${SHOTS}/how-page.png`, fullPage: true });
+  await how.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => how.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('the how page explains the steps before any request', async ({ page }) => {
+  await page.goto('/how');
+  await expect(page.getByRole('heading', { level: 2 })).toHaveCount(5);
+  await expect(page.locator('.hp-lede')).toContainText('Ask the agent something in the studio');
+  await expect(page.locator('.hp-run')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Back to the studio' })).toHaveAttribute('href', '/');
+});

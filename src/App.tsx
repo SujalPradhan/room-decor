@@ -90,6 +90,7 @@ import {matchLayoutIntent} from "./layout-intent";
 import type {LayoutAgentResult} from "./layout-agent-types";
 import {askLayoutAgent,LayoutAgentHttpError,readLayoutAgentResult} from "./layout-agent-client";
 import type {LayoutGoal} from "./layout-goals";
+import {agentRecord,rulesRecord,saveRun} from "./agent-run";
 import { useProductStudio } from "./useProductStudio";
 import { productToFurniture, generatedProductToFurniture, isSafeProductImageUrl } from "./product-domain";
 import { chooseProductPosition, placeProduct, readPlacementIntents, WALL_KINDS, type ProductPlacementIntent } from "./automatic-products";
@@ -524,7 +525,7 @@ export default function App() {
   };
   const useRules=(request:string,note='Keyword rules')=>{
     const current=projectRef.current,match=matchLayoutIntent(request,current.layouts,current.activeLayoutId,current.room,spaceOf(current));
-    setLayoutReply({text:match.reply,meta:note});
+    setLayoutReply({text:match.reply,meta:note,how:true});saveRun(rulesRecord(request,current,match.reply,note,match.targetId));
     if(match.targetId)startPreset(match.targetId,request);
   };
   const stopAgent=()=>{agentAbort.current?.abort();agentAbort.current=null;setAgentBusy(false);};
@@ -610,7 +611,7 @@ export default function App() {
     setAgentBusy(false);
     if(stale()){movedAway();return;}
     const current=projectRef.current,from=current.layouts.find(l=>l.id===current.activeLayoutId)!;
-    setLayoutReply({text:result.reply,meta:`${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`});
+    setLayoutReply({text:result.reply,meta:`${result.model} · ${(result.elapsedMs/1000).toFixed(1)}s`,how:true});saveRun(agentRecord(request,asked,result));
     if(result.action==='use_layout'&&result.layoutId!==from.id)startPreset(result.layoutId,request,true,result);
     if(result.action==='rearrange'){
       agentLayout.current=result.layout;

@@ -129,3 +129,8 @@
 .le-step-short { display:block; margin-top:3px; color:#c9cebf; font-size:10px; line-height:1.4; }
 .le-step-short strong { margin-right:4px; color:var(--gold,#dabe89); font-weight:600; }
 .le-step-short.is-trade-off strong { color:#c9a27e; }
+.lp-how { color:var(--gold,#dabe89); text-decoration:underline; text-underline-offset:2px; }
+.lp-how:hover { color:#e6d5b4; }
+.le-how { margin:18px 0 0; font-size:11px; }
+.le-how a { display:inline-flex; align-items:center; min-height:44px; color:var(--gold,#dabe89); text-decoration:underline; text-underline-offset:3px; }
+.le-how a:hover { color:#e6d5b4; }

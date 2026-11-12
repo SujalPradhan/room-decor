@@ -252,6 +252,7 @@ export async function runAgentLoop(request: string, project: Project, prepared: 
   const { situation, floors } = prepared, active = activeOf(project), began = Date.now(), place = placeOf(spaceOf(project));
   const deadline = loop.deadlineMs ?? DEADLINE_MS, window = loop.callWindowMs ?? CALL_WINDOW_MS, share = loop.callShareMs ?? CALL_SHARE_MS, timeout = AbortSignal.timeout(deadline);
   let previous: AgentPrevious | undefined, last: AgentAnswer | undefined, lastProblems: string[] = [], wantsFloor = false, attempt = 1;
+  const rejected: string[][] = [];
   for (; attempt <= MAX_ATTEMPTS && Date.now() - began < deadline - window; attempt++) {
     stopped(loop.signal);
     loop.onAttempt?.(attempt);
@@ -260,22 +261,23 @@ export async function runAgentLoop(request: string, project: Project, prepared: 
     try { last = await loop.ask(situation, previous, callSignal); }
     catch (error) {
       stopped(loop.signal);
-      if (error instanceof AgentReplyError) { lastProblems = ['The previous response was not valid JSON.']; previous = { proposal: null, problems: lastProblems }; continue; }
+      if (error instanceof AgentReplyError) { lastProblems = ['The previous response was not valid JSON.']; rejected.push(lastProblems); previous = { proposal: null, problems: lastProblems }; continue; }
       // Out of time after the checks rejected a try: answer from what was learned. Any other failure, such as the
       // endpoint answering 429 or 5xx, goes back to the app, which answers with its rules in plain words.
       if ((timeout.aborted || callTimeout.aborted) && lastProblems.length) break;
       throw error;
     }
     stopped(loop.signal);
-    const meta = { provider: last.provider, model: last.model, attempts: attempt };
+    const meta = { provider: last.provider, model: last.model, attempts: attempt, rejected: [...rejected] };
     wantsFloor ||= last.proposal.goal === 'more_open_floor';
     const verdict = await loop.judge(last.proposal);
     stopped(loop.signal);
     if (verdict.outcome) return { ...verdict.outcome, ...meta, elapsedMs: Date.now() - began };
     lastProblems = verdict.problems;
+    rejected.push(lastProblems.slice(0, 3));
     previous = { proposal: last.proposal, problems: lastProblems.slice(0, 12).map(problem => problem.slice(0, 240)) };
   }
-  const attempts = Math.min(attempt, MAX_ATTEMPTS), meta = { provider: last?.provider ?? 'none', model: last?.model ?? 'none', attempts, elapsedMs: Date.now() - began };
+  const attempts = Math.min(attempt, MAX_ATTEMPTS), meta = { provider: last?.provider ?? 'none', model: last?.model ?? 'none', attempts, rejected, elapsedMs: Date.now() - began };
   const spacious = project.layouts.filter(layout => layout.id !== active.id).sort((a, b) => floors[b.id] - floors[a.id])[0];
   if (wantsFloor && spacious && floors[spacious.id] >= floors[active.id] + MIN_FLOOR_GAIN) return { action: 'use_layout', layoutId: spacious.id, reply: `${spacious.name} has the most open floor of your saved layouts: ${round(floors[spacious.id])} m².`, ...meta };
   return { action: 'decline', reply: `I could not find an arrangement that passes the ${place} checks. ${lastProblems[0] ?? ''}`.trim(), ...meta };

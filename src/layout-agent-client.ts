@@ -13,6 +13,7 @@ export function readLayoutAgentResult(value: unknown, project: Project): LayoutA
   if (typeof result.reply !== 'string' || !result.reply.trim() || typeof result.model !== 'string' || typeof result.provider !== 'string' || !Number.isFinite(result.elapsedMs)) throw new Error('Incomplete agent reply.');
   if (result.goals !== undefined && (!Array.isArray(result.goals) || result.goals.some(goal => !LAYOUT_GOALS.includes(goal)))) throw new Error('Invalid agent goals.');
   if (result.limits !== undefined && typeof result.limits !== 'string') throw new Error('Invalid agent limits.');
+  if (result.rejected !== undefined && (!Array.isArray(result.rejected) || result.rejected.some(problems => !Array.isArray(problems) || problems.some(problem => typeof problem !== 'string')))) throw new Error('Invalid agent attempts.');
   if (result.action === 'decline') return result;
   if (result.action === 'use_layout') {
     if (!project.layouts.some(layout => layout.id === result.layoutId)) throw new Error('Unknown saved layout.');
