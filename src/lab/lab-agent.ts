@@ -2,7 +2,7 @@ import type { Channel, LabDesign, LabIssue, LabItem, LabKind, LabReport, LabSock
 import { evaluate, footprint } from './checks';
 import { cheapestWithin, lowestCarbon } from './optimise';
 import { ELECTRICAL_SAFE, EXTINGUISHERS, AIRCONS, MATERIALS, RULES, SOCKET_LIMIT_W, VOLTS, aircon, material } from './rules';
-import { piece } from './scenario';
+import { KIND_DEFAULTS, piece } from './scenario';
 import {
   LAB_NAMED_PROBLEMS, LabAgentError, MAX_CHANGES, MAX_LAB_ITEMS, WHY_WORDS, labSituation, readLabProposal,
   type AddKind, type LabChange, type LabGoal, type LabPrevious, type LabProposal, type LabSituation,
@@ -39,6 +39,7 @@ const errorsOf = (report: LabReport) => report.issues.filter(issue => issue.seve
 const NEW_PIECE: Record<AddKind, { id: string; name: string }> = {
   extinguisher: { id: 'ext', name: 'Extinguisher' }, heater: { id: 'heater', name: 'Heater' }, shelf: { id: 'shelf', name: 'Shelf' },
   fridge: { id: 'fridge', name: 'Fridge' }, printer: { id: 'printer', name: 'Printer' }, coffee: { id: 'coffee', name: 'Coffee machine' },
+  desk: { id: 'desk', name: 'Desk' }, chair: { id: 'chair', name: 'Chair' },
 };
 
 function nextPiece(design: LabDesign, kind: AddKind) {
@@ -104,7 +105,7 @@ function structural(design: LabDesign, change: LabChange): string[] {
     case 'extinguisher': return item!.kind === 'extinguisher' ? [] : [`${item!.name}${LAB_NAMED_PROBLEMS.notExtinguisher}`];
     case 'remove': return BLOCKED_REMOVAL.includes(item!.kind) ? ['Desks, chairs and the air conditioner cannot be removed.'] : [];
     case 'add': {
-      if (design.items.length >= MAX_LAB_ITEMS) return ['The office holds at most 60 pieces.'];
+      if (design.items.length >= MAX_LAB_ITEMS) return [`The office holds at most ${MAX_LAB_ITEMS} pieces.`];
       const fresh = piece({ id: 'new', name: 'new', kind: change.kind, x: change.x, z: change.z, ...(change.rotation !== undefined ? { rotation: change.rotation } : {}) });
       return [...(inside(footprint(fresh)) ? [] : ['A new piece would be outside the room.']), ...(change.socketId && !design.sockets.some(socket => socket.id === change.socketId) ? ['A change names a socket that is not in the office.'] : [])];
     }
@@ -113,13 +114,13 @@ function structural(design: LabDesign, change: LabChange): string[] {
 
 export function goalsFor(request: string): LabGoal[] {
   const q = request.toLowerCase(), goals = new Set<LabGoal>();
-  if (/power|socket|circuit|overload|plug|trip|breaker|extension|watt|amp\b/.test(q)) goals.add('power');
+  if (/power|socket|circuit|overload|plug|trip|breaker|extension|watt|amp\b|wiring|untangle/.test(q)) goals.add('power');
   if (/cool|heat|hot|warm|air.?con|\bac\b|temperature/.test(q)) goals.add('cooling');
-  if (/cable|wire|\blead|trailing|loose|trunking|trip/.test(q)) goals.add('cables');
+  if (/cable|wire|wiring|untangle|tangle|\blead|trailing|loose|trunking|trip/.test(q)) goals.add('cables');
   if (/fire|extinguish|smoke|escape|exit/.test(q)) goals.add('fire');
   if (/cost|cheap|budget|price|save|afford|£/.test(q)) goals.add('cost');
   if (/carbon|co2|green|sustainab|emission|\beco/.test(q)) goals.add('carbon');
-  if (/\bspace\b(?! heater)|layout|overlap|walkway|walking|clear|shelf|move|room/.test(q)) goals.add('space');
+  if (/\bspace\b(?! heater)|layout|overlap|walkway|walking|clear|shelf|move/.test(q)) goals.add('space');
   if (/\b(everything|safe|safely|safety|fix|errors?|problems?|issues?|all)\b/.test(q)) for (const goal of ['power', 'cooling', 'cables', 'fire', 'space'] as LabGoal[]) goals.add(goal);
   return [...goals];
 }
@@ -190,7 +191,7 @@ function describe(design: LabDesign, change: LabChange, next: LabDesign): { titl
   const named = (id: string) => lower((next.items.find(item => item.id === id) ?? design.items.find(item => item.id === id))?.name ?? id);
   switch (change.type) {
     case 'move': return { title: `Moved ${named(change.itemId)}`, layer: 'space', itemIds: [change.itemId] };
-    case 'plug': return { title: `Moved ${named(change.itemId)} to ${design.sockets.find(socket => socket.id === change.socketId)?.name ?? change.socketId}`, layer: 'power', itemIds: [change.itemId] };
+    case 'plug': return { title: `Plugged ${named(change.itemId)} into ${design.sockets.find(socket => socket.id === change.socketId)?.name ?? change.socketId}`, layer: 'power', itemIds: [change.itemId] };
     case 'channel': return { title: `Ran ${named(change.itemId)}'s ${change.cable} cable ${CABLE_WORD[change.channel]}`, layer: 'cables', itemIds: [change.itemId] };
     case 'material': return { title: `Changed the ${change.group} material to ${material(change.materialId)?.name ?? change.materialId}`, layer: 'materials', itemIds: design.items.filter(item => item.kind === (change.group === 'desk' ? 'desk' : change.group === 'shelf' ? 'shelf' : '')).map(item => item.id) };
     case 'aircon': return { title: `Changed the air conditioner to the ${aircon(change.acId)?.name ?? change.acId}`, layer: 'cooling', itemIds: design.items.filter(item => item.kind === 'ac').map(item => item.id) };
@@ -278,8 +279,10 @@ function candidates(design: LabDesign, report: LabReport, issue: LabIssue): LabC
     }
     case 'walkway-cable': case 'loose-length': {
       if (!item) return [];
-      const cable = /data cable/.test(issue.message) ? 'data' : 'power';
-      return (['wall', 'floor'] as Channel[]).map(channel => ({ type: 'channel' as const, itemId: item.id, cable, channel, why }));
+      const cable: 'data' | 'power' = /data cable/.test(issue.message) ? 'data' : 'power';
+      const closer = cable === 'power' ? pickSocket(design, item.id, item.watts, item.x, item.z) : undefined;
+      const replug: LabChange[] = closer && closer.id !== item.socketId ? [{ type: 'plug', itemId: item.id, socketId: closer.id, why }] : [];
+      return [...replug, ...(['floor', 'wall'] as Channel[]).map(channel => ({ type: 'channel' as const, itemId: item.id, cable, channel, why }))];
     }
     case 'data-separation': return item ? [{ type: 'channel', itemId: item.id, cable: 'data', channel: 'wall', why }] : [];
     case 'shelf-load': {
@@ -312,21 +315,48 @@ function fixScope(design: LabDesign, scope: Set<string>, max = 30): { design: La
   for (let round = 0; round < max; round++) {
     const report = evaluate(current), target = report.issues.find(issue => scope.has(issue.rule) && !skipped.has(issue.message));
     if (!target) break;
-    let done: { design: LabDesign; change: LabChange } | undefined;
+    let done: { design: LabDesign; change: LabChange } | undefined, fallback: typeof done;
+    const known = new Set(report.issues.map(issue => issue.message));
     for (const change of candidates(current, report, target)) {
       const next = applyChange(current, change);
-      if (!same(next, current) && improves(report, evaluate(next), scope)) { done = { design: next, change }; break; }
+      if (same(next, current)) continue;
+      const after = evaluate(next);
+      if (!improves(report, after, scope)) continue;
+      if (!after.issues.some(issue => issue.message === target.message) && after.issues.every(issue => known.has(issue.message))) { done = { design: next, change }; break; }
+      fallback ??= { design: next, change };
     }
+    done ??= fallback;
     if (done) { current = done.design; changes.push(done.change); } else skipped.add(target.message);
   }
   return { design: current, changes };
 }
 
-const ADD_WORDS: [RegExp, AddKind][] = [[/space heater|heater/, 'heater'], [/printer/, 'printer'], [/coffee/, 'coffee'], [/fridge/, 'fridge'], [/shel(f|ves)/, 'shelf'], [/extinguisher/, 'extinguisher']];
+const ADD_WORDS: [RegExp, AddKind][] = [[/space heater|heater/, 'heater'], [/printer/, 'printer'], [/coffee|kettle/, 'coffee'], [/fridge/, 'fridge'], [/shel(f|ves)/, 'shelf'], [/extinguisher/, 'extinguisher'], [/desks?\b/, 'desk'], [/chairs?\b|seats?\b/, 'chair']];
+const COUNTS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4 };
+const NOUNS = 'desks?|chairs?|printers?|shel(?:f|ves)|extinguishers?|fridges?|heaters?|coffee machines?|kettles?';
 
-function addPlan(design: LabDesign, request: string): LabChange | undefined {
+function countIn(request: string): number {
+  const found = request.toLowerCase().match(new RegExp(`\\b(\\d+|one|two|three|four)\\s+(?:new\\s+)?(?:${NOUNS})\\b`))?.[1];
+  return Math.min(4, Math.max(1, found ? COUNTS[found] ?? Number(found) : 1));
+}
+
+function addPlan(design: LabDesign, request: string): LabChange[] {
   const q = request.toLowerCase(), kind = /\b(add|put|place|install|bring|get|need|want)\b/.test(q) ? ADD_WORDS.find(([pattern]) => pattern.test(q))?.[1] : undefined;
-  if (!kind) return undefined;
+  if (!kind || kind === 'chair') return [];
+  const changes: LabChange[] = [];
+  let current = design;
+  for (let n = 0; n < countIn(request); n++) {
+    const next = placeOne(current, q, kind);
+    if (!next.length) break;
+    changes.push(...next);
+    for (const change of next) current = applyChange(current, change);
+  }
+  return changes;
+}
+
+const SEAT_GAP = 0.05;
+
+function placeOne(design: LabDesign, q: string, kind: AddKind): LabChange[] {
   const { width, depth, door, vent } = design.room;
   const named = q.match(/\b(left|right|back|front)\b/)?.[1];
   const wallPoint: Record<string, [number, number]> = { left: [-width / 2, 0], right: [width / 2, 0], back: [0, -depth / 2], front: [door.x, depth / 2] };
@@ -351,7 +381,21 @@ function addPlan(design: LabDesign, request: string): LabChange | undefined {
     const next = applyChange(design, change);
     if (geometry(evaluate(next)) > geometry(before)) continue;
     const added = next.items[next.items.length - 1], socket = next.sockets.find(each => each.id === added.socketId);
-    return { ...change, why: short(`Adds the ${NEW_PIECE[kind].name.toLowerCase()} you asked for${socket ? `, on ${socket.name}` : ''}.`) };
+    const placed: LabChange = { ...change, why: short(`Adds the ${NEW_PIECE[kind].name.toLowerCase()} you asked for${socket ? `, on ${socket.name}` : ''}.`) };
+    if (kind !== 'desk') return [placed];
+    const seat = chairFor(next, added, geometry(before));
+    if (seat) return [placed, seat];
+  }
+  return [];
+}
+
+function chairFor(design: LabDesign, desk: LabItem, allowed: number): LabChange | undefined {
+  const box = footprint(desk), { w } = KIND_DEFAULTS.chair, reach = (side: 'x' | 'z') => (side === 'x' ? (box.maxX - box.minX) / 2 : (box.maxZ - box.minZ) / 2) + w / 2 + SEAT_GAP;
+  const sides: [number, number][] = [[desk.x, desk.z + reach('z')], [desk.x, desk.z - reach('z')], [desk.x + reach('x'), desk.z], [desk.x - reach('x'), desk.z]];
+  for (const [x, z] of sides.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]))) {
+    const change: LabChange = { type: 'add', kind: 'chair', x, z, why: short(`Adds a chair so someone can sit at ${desk.name.toLowerCase()}.`) };
+    const next = applyChange(design, change);
+    if (!same(next, design) && evaluate(next).issues.filter(issue => issue.rule === 'overlap' || issue.rule === 'walkway-clear').length <= allowed) return change;
   }
   return undefined;
 }
@@ -377,8 +421,8 @@ function materialPlan(design: LabDesign, request: string): LabChange[] {
 export function rulesPlan(request: string, design: LabDesign): { changes: LabChange[]; goals: LabGoal[]; remaining: string[]; recognised: boolean } {
   const goals = goalsFor(request), changes: LabChange[] = [];
   let current = design;
-  const add = addPlan(current, request);
-  if (add) { changes.push(add); current = applyChange(current, add); }
+  const added = addPlan(current, request), add = added.length > 0;
+  for (const change of added) { changes.push(change); current = applyChange(current, change); }
   const materials = materialPlan(current, request);
   for (const change of materials) { changes.push(change); current = applyChange(current, change); }
   const scope = new Set((add ? (['power', 'cooling', 'cables', 'fire', 'space'] as LabGoal[]) : goals).flatMap(goal => GOAL_RULES[goal]));
@@ -397,7 +441,7 @@ export function runRules(request: string, design: LabDesign, began = Date.now(),
   const plan = rulesPlan(request, design), { steps, final } = buildSteps(design, plan.changes), limits = limitsFor(request);
   const outcome: LabAgentRun['outcome'] = steps.length ? 'changed' : plan.recognised ? 'none' : 'declined';
   const tail = plan.remaining.length ? ` Still failing: ${plan.remaining.slice(0, 2).join(' ')}` : '';
-  const reply = steps.length ? `Made ${steps.length} ${steps.length === 1 ? 'change' : 'changes'} with the built-in rules.${tail}` : plan.recognised ? 'The checks find nothing to change for that.' : 'The built-in rules can fix power, cooling, cables, fire and shelf errors, add a heater, printer, coffee machine, fridge, shelf or extinguisher, and switch materials for cost or carbon.';
+  const reply = steps.length ? `Made ${steps.length} ${steps.length === 1 ? 'change' : 'changes'} with the built-in rules.${tail}` : plan.recognised ? 'The checks find nothing to change for that.' : 'The built-in rules can fix power, cooling, cables, fire and shelf errors, add a heater, printer, coffee machine, fridge, shelf, extinguisher or desks with chairs, and switch materials for cost or carbon.';
   return { source: 'rules', reply, steps, attempts: 0, rejected: [], goals: plan.goals, limits, elapsedMs: Date.now() - began, final, outcome, ...extra };
 }
 

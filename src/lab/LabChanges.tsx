@@ -1,4 +1,5 @@
 import { Play, Undo2 } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import type { LabAgentRun } from './lab-agent';
 import type { LabReport } from './model';
 
@@ -9,17 +10,19 @@ const kg = (value: number) => `${Math.round(value).toLocaleString('en-GB')} kg`;
 const key = (issue: LabReport['issues'][number]) => `${issue.rule}|${issue.message}`;
 const plain = (line: string) => !/^(Cost|Carbon)\b/.test(line) && !/ issues: /.test(line);
 
-export interface LabChangesProps { summary: ChangeSummary; active: number | null; playing: boolean; onShow(index: number | null): void; onReplay(): void; onUndo(): void }
+export interface LabChangesProps { summary: ChangeSummary; active: number | null; playing: boolean; speed: number; speeds: number[]; onSpeed(speed: number): void; onShow(index: number | null): void; onReplay(): void; onUndo(): void }
 
-export default function LabChanges({ summary, active, playing, onShow, onReplay, onUndo }: LabChangesProps) {
+export default function LabChanges({ summary, active, playing, speed, speeds, onSpeed, onShow, onReplay, onUndo }: LabChangesProps) {
   const { run, before, after } = summary;
   const now = new Set(after.issues.map(key)), then = new Set(before.issues.map(key));
   const fixed = before.issues.filter(issue => !now.has(key(issue))).length, added = after.issues.filter(issue => !then.has(key(issue))).length;
-  const steps = run.steps;
+  const steps = run.steps, list = useRef<HTMLOListElement>(null);
+  useEffect(() => { list.current?.querySelector('li.is-active')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [active]);
   return <section className="lab-changes" aria-label="What the agent changed" aria-live="polite">
     <div className="lab-changes-head">
       <h3>{steps.length ? `The agent made ${steps.length} ${steps.length === 1 ? 'change' : 'changes'}` : 'No changes made'}</h3>
       <div className="lab-changes-actions">
+        {steps.length > 0 && <div className="lab-speed" role="group" aria-label="Playback speed">{speeds.map(each => <button key={each} type="button" aria-pressed={speed === each} className={speed === each ? 'active' : ''} onClick={() => onSpeed(each)}>{each}x</button>)}</div>}
         {steps.length > 0 && <button type="button" className="lab-ghost" onClick={onReplay} disabled={playing}><Play size={12} /> Replay</button>}
         {steps.length > 0 && <button type="button" className="lab-ghost" onClick={onUndo}><Undo2 size={12} /> Undo</button>}
       </div>
@@ -31,7 +34,7 @@ export default function LabChanges({ summary, active, playing, onShow, onReplay,
       <span>Cost {money(before.meters.costGBP)} → {money(after.meters.costGBP)}</span>
       <span>Carbon {kg(before.meters.carbonKg)} → {kg(after.meters.carbonKg)}</span>
     </p>}
-    {steps.length > 0 && <ol className="lab-change-list">
+    {steps.length > 0 && <ol className="lab-change-list" ref={list}>
       {steps.map((step, index) => {
         const detail = step.numbers.filter(plain).slice(0, 2);
         return <li key={step.id} className={active === index ? 'is-active' : ''}>

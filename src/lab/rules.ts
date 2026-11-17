@@ -55,6 +55,9 @@ export const AIRCONS: AirCon[] = [
   { id: 'ac-3500', name: '3.5 kW split unit', coolingW: 3500, costGBP: 1400, carbonKg: 250 },
   { id: 'ac-5000', name: '5.0 kW split unit', coolingW: 5000, costGBP: 1900, carbonKg: 330 },
   { id: 'ac-7100', name: '7.1 kW split unit', coolingW: 7100, costGBP: 2600, carbonKg: 450 },
+  { id: 'ac-8000', name: '8.0 kW split unit', coolingW: 8000, costGBP: 2900, carbonKg: 500 },
+  { id: 'ac-10000', name: '10.0 kW split unit', coolingW: 10000, costGBP: 3500, carbonKg: 620 },
+  { id: 'ac-12000', name: '12.0 kW split unit', coolingW: 12000, costGBP: 4300, carbonKg: 760 },
 ];
 
 export const CHANNELS: Record<Channel, { name: string; costPerM: number; carbonPerM: number }> = {

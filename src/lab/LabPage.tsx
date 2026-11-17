@@ -2,10 +2,10 @@ import { BedDouble, Box, Eye, FlaskConical, Footprints, Layers, Loader2, Map as 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { evaluate } from './checks';
 import { runLabAgent, type LabAgentRun, type LabStep } from './lab-agent';
-import { createLabScene } from './lab-scene';
+import { createLabScene, type LabPlay } from './lab-scene';
 import LabChanges, { type ChangeSummary } from './LabChanges';
 import LabMeters from './LabMeters';
-import type { Channel, LabDesign, LabItem } from './model';
+import type { Channel, LabDesign, LabItem, LabReport } from './model';
 import { materialOptions } from './optimise';
 import { MATERIALS, RULES } from './rules';
 import { createOffice } from './scenario';
@@ -13,11 +13,12 @@ import { defaultFireStart, runDrill, type DrillResult } from './smoke';
 import TradeOffChart from './TradeOffChart';
 import './lab.css';
 
-const KEY = 'roomshift-lab-design-v1';
-const SUGGESTIONS = ['Fix every problem', 'Add a 2 kW space heater', 'Make the room safer in a fire', 'Make it as low carbon as possible', 'Is this fire safe?'];
+const KEY = 'roomshift-lab-design-v2';
+const SUGGESTIONS = ['Untangle the wiring', 'Fix every problem', 'Add 2 desks and wire them up', 'Add a 2 kW space heater', 'Make the room safer in a fire', 'Make it as low carbon as possible', 'Is this fire safe?'];
 const NEXT_CHANNEL: Record<Channel, Channel> = { loose: 'wall', wall: 'floor', floor: 'loose' };
 const MODES = [{ id: 'plan', label: '2D plan', Icon: MapIcon }, { id: 'orbit', label: '3D', Icon: Box }, { id: 'walk', label: 'Walk inside', Icon: Footprints }] as const;
-const STEP_MS = 1600;
+const STEP_MS = 2600, WIRING_MS = 3600, HOLD_MS = 700;
+const SPEEDS = [0.5, 0.75, 1];
 type Mode = (typeof MODES)[number]['id'];
 
 function load(): LabDesign {
@@ -45,6 +46,10 @@ export default function LabPage() {
   const [summary, setSummary] = useState<ChangeSummary | null>(null);
   const [active, setActive] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(0.75);
+  const [play, setPlay] = useState<LabPlay | null>(null);
+  const [origin, setOrigin] = useState<LabDesign | null>(null);
+  const runId = useRef(0);
   const [drillOn, setDrillOn] = useState(false);
   const [fireSel, setFireSel] = useState('auto');
   const [t, setT] = useState(0);
@@ -84,7 +89,7 @@ export default function LabPage() {
     cable: (id: string, kind: 'power' | 'data') => edit(items => items.map(each => each.id !== id ? each : kind === 'data' ? { ...each, dataChannel: NEXT_CHANNEL[each.dataChannel ?? 'wall'] } : { ...each, channel: NEXT_CHANNEL[each.channel] })),
   });
   const stopShowing = useRef(() => { });
-  stopShowing.current = () => { setPlaying(false); setActive(null); };
+  stopShowing.current = () => { setPlaying(false); setActive(null); setPlay(null); };
 
   useEffect(() => {
     if (!container.current) return;
@@ -95,6 +100,7 @@ export default function LabPage() {
       onMoveSocket: editing((id: string, x: number, z: number) => handlers.current.socket(id, x, z)),
       onMoveVia: editing((id: string, x: number, z: number) => handlers.current.via(id, x, z)),
       onPickCable: editing((id: string, kind: 'power' | 'data') => handlers.current.cable(id, kind)),
+      onPlayDone: key => onPlayDone.current(key),
     });
     scene.current = instance;
     return () => { scene.current = null; instance.dispose(); };
@@ -102,10 +108,10 @@ export default function LabPage() {
 
   useEffect(() => {
     scene.current?.update({
-      design: shown, report, mode, xray, selectedId, highlight, changes,
+      design: shown, report, mode, xray, selectedId, highlight, changes, play,
       drill: drill ? { arrival: drill.arrival, cols: drill.cols, rows: drill.rows, cell: drill.cell, originX: drill.originX, originZ: drill.originZ, t, people: drill.people.map(({ itemId, path, exitS, blockedS }) => ({ itemId, path, exitS, blockedS })), start: drill.start } : null,
     });
-  }, [shown, report, mode, xray, selectedId, highlight, changes, drill, t]);
+  }, [shown, report, mode, xray, selectedId, highlight, changes, play, drill, t]);
 
   useEffect(() => {
     if (!drillPlaying || !drill) return;
@@ -119,28 +125,50 @@ export default function LabPage() {
   }, [drillPlaying, drill]);
   useEffect(() => { if (drill && t >= drill.endS) setDrillPlaying(false); }, [t, drill]);
 
-  useEffect(() => {
-    if (!playing) return;
-    const timer = setTimeout(() => {
-      if (active === null || active >= steps.length - 1) { setPlaying(false); setActive(null); }
-      else setActive(active + 1);
-    }, STEP_MS);
-    return () => clearTimeout(timer);
-  }, [playing, active, steps.length]);
+  const wiringStep = (index: number) => ['power', 'cables'].includes(steps[index]?.layer ?? '');
+  const durationOf = (index: number) => Math.round((wiringStep(index) ? WIRING_MS : STEP_MS) / speed);
+  const startPlay = (index: number) => {
+    const step = steps[index], from = index === 0 ? origin : steps[index - 1]?.design;
+    if (!step || !from) { setPlay(null); return; }
+    const fromReport: LabReport = evaluate(from);
+    setPlay({ key: `${runId.current}-${index}-${Date.now()}`, from, fromReport, durationMs: durationOf(index), focus: step.itemIds, wiring: wiringStep(index) });
+  };
+  const [finished, setFinished] = useState<string | null>(null);
+  const onPlayDone = useRef((key: string) => setFinished(key));
 
-  const replay = () => { if (steps.length) { setActive(0); setPlaying(true); } };
+  useEffect(() => {
+    if (!playing || active === null || !play || finished !== play.key) return;
+    const timer = setTimeout(() => {
+      if (active >= steps.length - 1) { setPlaying(false); setActive(null); setPlay(null); }
+      else { setActive(active + 1); startPlay(active + 1); }
+    }, HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [playing, active, play, finished, steps.length]);
+
+  useEffect(() => {
+    if (!playing || !play) return;
+    const timer = setTimeout(() => setFinished(key => key ?? play.key), play.durationMs + 1500);
+    return () => clearTimeout(timer);
+  }, [playing, play]);
+
+  const replay = () => { if (steps.length) { setActive(0); setPlaying(true); startPlay(0); } };
+  const showOne = (index: number | null) => { setPlaying(false); setActive(index); if (index === null) setPlay(null); else startPlay(index); };
   const toggleDrill = () => { setDrillOn(on => !on); setT(0); setDrillPlaying(false); };
-  const reset = () => { abort.current?.abort(); setDesign(createOffice()); setUndo([]); setSummary(null); setActive(null); setPlaying(false); setSelectedId(null); setHighlight([]); setT(0); setBusy(false); };
+  const reset = () => { abort.current?.abort(); setDesign(createOffice()); setUndo([]); setSummary(null); setActive(null); setPlaying(false); setPlay(null); setSelectedId(null); setHighlight([]); setT(0); setBusy(false); };
 
   const apply = (run: LabAgentRun, before: LabDesign, local: boolean) => {
     const changed = run.outcome === 'changed' && run.steps.length > 0;
     setSummary({ run, before: evaluate(before), after: evaluate(changed ? run.final : before), local });
-    if (!changed) { setActive(null); setPlaying(false); return; }
+    if (!changed) { setActive(null); setPlaying(false); setPlay(null); return; }
     setUndo(list => [...list, before]);
     setDesign(run.final);
     setHighlight([]);
+    setOrigin(before);
+    runId.current += 1;
     setActive(0);
     setPlaying(true);
+    const first = run.steps[0], wiring = ['power', 'cables'].includes(first.layer);
+    setPlay({ key: `${runId.current}-0-${Date.now()}`, from: before, fromReport: evaluate(before), durationMs: Math.round((wiring ? WIRING_MS : STEP_MS) / speed), focus: first.itemIds, wiring });
   };
 
   const ask = useCallback(async (text: string) => {
@@ -149,7 +177,7 @@ export default function LabPage() {
     setRequest(trimmed);
     const controller = new AbortController();
     abort.current = controller;
-    setBusy(true); setAttempt(1); setPlaying(false); setActive(null); setHighlight([]); setSelectedId(null);
+    setBusy(true); setAttempt(1); setPlaying(false); setActive(null); setPlay(null); setHighlight([]); setSelectedId(null);
     try {
       const result = await runLabAgent(trimmed, design, { signal: controller.signal, onAttempt: setAttempt });
       if (!controller.signal.aborted) apply(result, design, false);
@@ -164,7 +192,7 @@ export default function LabPage() {
   const undoLast = () => {
     const previous = undo[undo.length - 1];
     if (!previous) return;
-    setDesign(previous); setUndo(list => list.slice(0, -1)); setSummary(null); setActive(null); setPlaying(false);
+    setDesign(previous); setUndo(list => list.slice(0, -1)); setSummary(null); setActive(null); setPlaying(false); setPlay(null);
   };
 
   const pickMaterials = (option: { materials: LabDesign['materials'] }) => {
@@ -200,7 +228,7 @@ export default function LabPage() {
         <button type="button" className="lab-ghost" onClick={reset}><RotateCcw size={14} /> Start over</button>
       </div>
     </header>
-    <p className="lab-intro">A small office where every piece uses power, makes heat and costs money and carbon. Ask the agent for a change. It checks the numbers, makes the change and shows you what it did.</p>
+    <p className="lab-intro">An open-plan office for 14 people where every piece uses power, makes heat and costs money and carbon. Ask the agent for a change. It checks the numbers, makes the change and shows you what it did.</p>
     <main className="lab-main">
       <div className="lab-left">
         <div className="lab-toolbar" role="toolbar" aria-label="View">
@@ -260,7 +288,7 @@ export default function LabPage() {
           </div>
           {!busy && <div className="lab-suggestions">{SUGGESTIONS.map(text => <button key={text} type="button" onClick={() => void ask(text)}>{text}</button>)}</div>}
         </form>
-        {summary && !busy && <LabChanges summary={summary} active={active} playing={playing} onShow={index => { setPlaying(false); setActive(index); }} onReplay={replay} onUndo={undoLast} />}
+        {summary && !busy && <LabChanges summary={summary} active={active} playing={playing} speed={speed} speeds={SPEEDS} onSpeed={setSpeed} onShow={showOne} onReplay={replay} onUndo={undoLast} />}
         {selected && <section className="lab-inspector" aria-label="Selected piece">
           <h3>{selected.name}</h3>
           <label>Watts<input type="number" min={0} max={5000} step={10} value={selected.watts} onChange={event => patch(selected.id, { watts: Math.max(0, Number(event.target.value) || 0) })} /></label>

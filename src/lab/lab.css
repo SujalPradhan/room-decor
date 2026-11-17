@@ -142,3 +142,6 @@
   .lab-totals { gap:16px; flex-wrap:wrap; }
   .lab-inspector select,.lab-inspector input { width:130px; }
 }
+.lab-speed { display:flex; gap:2px; padding:2px; border:1px solid #ffffff1c; border-radius:8px; }
+.lab-speed button { min-height:24px; padding:2px 7px; border-radius:6px; background:transparent; color:#a7b49e; font-size:11px; }
+.lab-speed button.active { background:#58d39b; color:#14201a; font-weight:600; }

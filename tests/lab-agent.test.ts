@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { evaluate } from '../src/lab/checks';
 import { applyChange, buildSteps, goalsFor, limitsFor, reviewProposal, runLabAgent, runRules, labNumbers } from '../src/lab/lab-agent';
-import { LAB_SYSTEM, labSituation, labUserMessage, parseLabProposal, readLabProposal, type LabChange, type LabProposal } from '../src/lab/lab-agent-prompt';
+import { LAB_SYSTEM, labSituation, labUserMessage, parseLabProposal, placesFor, readLabProposal, type LabChange, type LabProposal } from '../src/lab/lab-agent-prompt';
 import { RULES } from '../src/lab/rules';
-import { createOffice } from '../src/lab/scenario';
+import { KIND_DEFAULTS, createOffice } from '../src/lab/scenario';
 import { lowestCarbon } from '../src/lab/optimise';
 import { askLabModel, isLabCheckProblem, readLabAgentInput } from '../server/lab-agent';
 import { handleStudioRequest, type StudioEnv } from '../server/studio';
@@ -35,6 +35,22 @@ describe('proposal parsing', () => {
     for (const id of Object.keys(RULES)) expect(LAB_SYSTEM).toContain(id);
     expect(labUserMessage('x', situationOf())).toContain('shelf-plywood');
   });
+  it('does not hard-code the room size: it comes from the situation', () => {
+    expect(LAB_SYSTEM).not.toMatch(/\d m by \d m/);
+    const message = JSON.parse(labUserMessage('x', situationOf()));
+    expect(message.room).toMatchObject({ width: 10, depth: 7, height: 2.8 });
+    expect(message.doorCentre).toEqual([0, 3.5]);
+  });
+  it('offers desk spots with a clear chair spot beside each', () => {
+    const places = placesFor(situationOf()).desk;
+    expect(places.length).toBeGreaterThan(0);
+    for (const place of places) {
+      const desk = { ...KIND_DEFAULTS.desk, id: 'd', name: 'd', kind: 'desk' as const, x: place.x, z: place.z, rotation: place.rotation, socketId: null, channel: 'loose' as const };
+      const seat = { ...KIND_DEFAULTS.chair, id: 'c', name: 'c', kind: 'chair' as const, x: place.chair!.x, z: place.chair!.z, socketId: null, channel: 'loose' as const };
+      const added = { ...office, items: [...office.items, desk, seat] };
+      expect(evaluate(added).issues.filter(issue => issue.rule === 'overlap' || issue.rule === 'walkway-clear')).toEqual([]);
+    }
+  });
 });
 
 describe('applyChange', () => {
@@ -50,13 +66,25 @@ describe('applyChange', () => {
   });
   it('adds numbered pieces, plugging powered ones into a socket that fits', () => {
     const withExt = applyChange(office, { type: 'add', kind: 'extinguisher', x: 1.5, z: 2.2, rotation: 180, why: '' });
-    expect(withExt.items.at(-1)).toMatchObject({ id: 'ext-2', name: 'Extinguisher 2', kind: 'extinguisher', extinguisher: 'co2', socketId: null });
+    expect(withExt.items.at(-1)).toMatchObject({ id: 'ext-3', name: 'Extinguisher 3', kind: 'extinguisher', extinguisher: 'co2', socketId: null });
     const twice = applyChange(withExt, { type: 'add', kind: 'extinguisher', x: 1, z: 2.2, extinguisher: 'powder', why: '' });
-    expect(twice.items.at(-1)).toMatchObject({ id: 'ext-3', extinguisher: 'powder' });
+    expect(twice.items.at(-1)).toMatchObject({ id: 'ext-4', extinguisher: 'powder' });
     const heater = applyChange(office, { type: 'add', kind: 'heater', x: 2.8, z: -1.5, rotation: 270, why: '' }).items.at(-1)!;
     expect(heater).toMatchObject({ id: 'heater-1', name: 'Heater 1', watts: 2000 });
-    expect(['s1', 's2']).toContain(heater.socketId);
+    expect(heater.socketId).toBe('s4');
     expect(applyChange(office, { type: 'add', kind: 'heater', x: 0, z: 0, socketId: 's5', why: '' }).items.at(-1)?.socketId).toBe('s5');
+  });
+  it('adds a desk with a socket and a data cable, and a chair that adds a person', () => {
+    const withDesk = applyChange(office, { type: 'add', kind: 'desk', x: 4.2, z: -0.5, rotation: 180, why: '' });
+    const desk = withDesk.items.at(-1)!;
+    expect(desk).toMatchObject({ id: 'desk-13', name: 'Desk 13', kind: 'desk', watts: 180, data: true, dataChannel: 'wall' });
+    expect(withDesk.sockets.map(socket => socket.id)).toContain(desk.socketId);
+    const withChair = applyChange(withDesk, { type: 'add', kind: 'chair', x: 4.2, z: 0.2, why: '' });
+    expect(withChair.items.at(-1)).toMatchObject({ id: 'chair-15', kind: 'chair', seats: 1, socketId: null });
+    const before = evaluate(office).meters, after = evaluate(withChair).meters;
+    expect([after.people, after.heatW - before.heatW]).toEqual([15, 180 + 100]);
+    expect(evaluate(withChair).cables.some(cable => cable.id === 'desk-13-data')).toBe(true);
+    expect(applyChange(withDesk, { type: 'channel', itemId: 'desk-13', cable: 'data', channel: 'floor', why: '' }).items.at(-1)?.dataChannel).toBe('floor');
   });
   it('does not change the input and ignores unknown ids', () => {
     const copy = structuredClone(office);
@@ -67,10 +95,11 @@ describe('applyChange', () => {
 });
 
 describe('reviewProposal', () => {
-  const heater: LabChange = { type: 'add', kind: 'heater', x: 2.83, z: -1.5, rotation: 270, why: 'Warm the office.' };
+  const heater: LabChange = { type: 'add', kind: 'heater', x: 4.85, z: 0.2, rotation: 270, why: 'Warm the office.' };
+  const kettle: LabChange = { type: 'plug', itemId: 'kettle', socketId: 's8', why: 'Socket 7 carries 3,800 W, over its 2,990 W limit.' };
   it('rejects invented ids, locked pieces and positions outside the room', () => {
     expect(reviewProposal(office, proposal([{ type: 'plug', itemId: 'ghost', socketId: 's1', why: '' }])).problems).toEqual(['A change names a piece that is not in the office.']);
-    expect(reviewProposal(office, proposal([{ type: 'plug', itemId: 'coffee', socketId: 's9', why: '' }])).problems).toEqual(['A change names a socket that is not in the office.']);
+    expect(reviewProposal(office, proposal([{ type: 'plug', itemId: 'coffee', socketId: 's99', why: '' }])).problems).toEqual(['A change names a socket that is not in the office.']);
     expect(reviewProposal(office, proposal([{ type: 'material', group: 'desk', materialId: 'desk-gold', why: '' }])).problems).toEqual(['A change names a material that is not in the catalogue.']);
     expect(reviewProposal(office, proposal([{ type: 'material', group: 'desk', materialId: 'floor-cork', why: '' }])).problems).toEqual(['A material does not belong to the group it was set for.']);
     expect(reviewProposal(office, proposal([{ type: 'move', itemId: 'coffee', x: 9, z: 0, why: '' }])).problems).toEqual(['Coffee machine would be outside the room.']);
@@ -79,7 +108,7 @@ describe('reviewProposal', () => {
     expect(reviewProposal(office, proposal([{ type: 'remove', itemId: 'desk-1', why: '' }])).problems).toEqual(['Desks, chairs and the air conditioner cannot be removed.']);
   });
   it('rejects a no-op and more than ten changes', () => {
-    expect(reviewProposal(office, proposal([{ type: 'plug', itemId: 'coffee', socketId: 's4', why: '' }])).problems).toEqual(['That changes nothing in the office.']);
+    expect(reviewProposal(office, proposal([{ type: 'plug', itemId: 'coffee', socketId: 's7', why: '' }])).problems).toEqual(['That changes nothing in the office.']);
     const many = Array.from({ length: 11 }, () => ({ type: 'aircon', acId: 'ac-7100', why: '' }) as LabChange);
     expect(reviewProposal(office, proposal(many)).problems).toContain('Use at most 10 changes.');
   });
@@ -90,11 +119,11 @@ describe('reviewProposal', () => {
     for (const problem of problems) expect(evaluate(reviewProposal(office, overload).design).issues.map(issue => issue.message)).toContain(problem);
   });
   it('accepts the fix: new load on a free socket, more cooling, a safe extinguisher', () => {
-    const fix = proposal([{ ...heater, socketId: 's1' }, { type: 'aircon', acId: 'ac-7100', why: '' }, { type: 'extinguisher', itemId: 'ext-1', extinguisher: 'co2', why: '' }], { goals: ['power', 'cooling', 'fire'] });
+    const fix = proposal([{ ...heater, socketId: 's6' }, kettle, { type: 'aircon', acId: 'ac-10000', why: '' }, { type: 'extinguisher', itemId: 'ext-1', extinguisher: 'co2', why: '' }], { goals: ['power', 'cooling', 'fire'] });
     expect(reviewProposal(office, fix).problems).toEqual([]);
   });
   it('flags a new error the request did not cover, but tolerates old ones', () => {
-    const noCooling = proposal([{ ...heater, socketId: 's1' }, { type: 'extinguisher', itemId: 'ext-1', extinguisher: 'co2', why: '' }], { goals: ['power', 'fire'] });
+    const noCooling = proposal([{ ...heater, socketId: 's6' }, kettle, { type: 'extinguisher', itemId: 'ext-1', extinguisher: 'co2', why: '' }], { goals: ['power', 'fire'] });
     expect(reviewProposal(office, noCooling).problems.some(problem => problem.startsWith('The room makes'))).toBe(true);
     const cheaper = proposal([{ type: 'material', group: 'floor', materialId: 'floor-carpet', why: '' }], { goals: ['cost'] });
     expect(reviewProposal(office, cheaper).problems).toEqual([]);
@@ -114,7 +143,7 @@ describe('steps', () => {
     expect(steps).toHaveLength(2);
     expect(steps[0].design.items.find(i => i.id === 'ext-1')?.extinguisher).toBe('co2');
     expect(steps[1].design).toEqual(final);
-    expect(steps[0]).toMatchObject({ layer: 'fire', why: 'Water is unsafe near electrics.', rule: 'extinguisher-reach' });
+    expect(steps[0]).toMatchObject({ layer: 'fire', why: 'Water is unsafe near electrics.', rule: 'extinguisher-type' });
     expect(steps[0].numbers).toEqual(labNumbers(evaluate(office), evaluate(steps[0].design)));
     const before = evaluate(steps[0].design).meters, after = evaluate(steps[1].design).meters;
     expect(steps[1].numbers).toContain(`Cost: £${Math.round(before.costGBP).toLocaleString('en-GB')} → £${Math.round(after.costGBP).toLocaleString('en-GB')}`);
@@ -138,12 +167,16 @@ describe('request reading', () => {
 });
 
 describe('rules fallback', () => {
-  it('fixes every error in the starting office, step by step', () => {
+  const layers = (run: ReturnType<typeof runRules>) => run.steps.map(step => step.layer);
+  const wiringLayers = ['power', 'cables'];
+  it('fixes every error in the starting office with visible wiring steps', () => {
     expect(errorMessages().length).toBeGreaterThan(0);
-    const run = runRules('fix everything and keep it safe', office);
+    const run = runRules('Fix every problem', office);
     expect(run).toMatchObject({ source: 'rules', outcome: 'changed' });
     expect(errorMessages(run.final)).toEqual([]);
     expect(evaluate(run.final).issues).toEqual([]);
+    expect(layers(run).filter(layer => wiringLayers.includes(layer)).length).toBeGreaterThanOrEqual(5);
+    expect(run.steps.map(step => step.title)).toEqual(expect.arrayContaining(['Plugged the coffee machine into Socket 8', 'Plugged Desk 9 into Socket 6', 'Plugged Desk 10 into Socket 6', 'Plugged Desk 1 into Socket 1', "Ran Desk 5's data cable in wall trunking"]));
     let design = office;
     for (const step of run.steps) {
       expect(step.numbers).toEqual(labNumbers(evaluate(design), evaluate(step.design)));
@@ -151,6 +184,15 @@ describe('rules fallback', () => {
       design = step.design;
     }
     expect(design).toEqual(run.final);
+  });
+  it('untangles the wiring with only plug and cable steps and leaves the rest', () => {
+    const run = runRules('Untangle the wiring', office);
+    expect(run.outcome).toBe('changed');
+    expect(layers(run).every(layer => wiringLayers.includes(layer))).toBe(true);
+    expect(run.steps.length).toBeGreaterThanOrEqual(5);
+    const rules = evaluate(run.final).issues.map(issue => issue.rule);
+    for (const rule of ['socket-load', 'walkway-cable', 'loose-length', 'data-separation']) expect(rules).not.toContain(rule);
+    expect(rules.sort()).toEqual(['extinguisher-type', 'shelf-load']);
   });
   it('lowers carbon for a low carbon request', () => {
     const before = evaluate(office).meters.carbonKg, run = runRules('make it as low carbon as possible', office);
@@ -175,9 +217,32 @@ describe('rules fallback', () => {
     expect(run.steps[0].title).toMatch(/^Added Heater 1/);
     expect(run.limits[0]).toMatch(/Lighting and windows/);
   });
-  it('re-plugs from an overloaded socket and upgrades cooling', () => {
-    const crowded = { ...office, items: office.items.map(item => item.id === 'fridge' || item.id === 'printer' ? { ...item, socketId: 's4', watts: item.watts + 900 } : item) };
-    expect(errorMessages(crowded).some(message => message.startsWith('Socket 4 carries'))).toBe(true);
+  it('a 2 kW heater overflows the 8,000 W cooling, so the fallback raises the air conditioner to cover 9,825 W', () => {
+    const run = runRules('Add a 2 kW space heater', office);
+    expect(run.steps.some(step => step.layer === 'cooling')).toBe(true);
+    expect(evaluate(run.final).meters).toMatchObject({ heatW: 9825, coolingW: 10000 });
+  });
+  it('adds 2 desks, each with a chair and a socket, wired without errors', () => {
+    const run = runRules('Add 2 desks and wire them up', office);
+    expect(run.outcome).toBe('changed');
+    const desks = run.final.items.filter(item => item.kind === 'desk').slice(-2), chairs = run.final.items.filter(item => item.kind === 'chair').slice(-2);
+    expect(desks.map(item => item.id)).toEqual(['desk-13', 'desk-14']);
+    expect(chairs.map(item => item.id)).toEqual(['chair-15', 'chair-16']);
+    for (const desk of desks) expect(run.final.sockets.map(socket => socket.id)).toContain(desk.socketId);
+    expect(evaluate(run.final).meters.people).toBe(16);
+    expect(run.steps[0].title).toMatch(/^Added Desk 13, plugged into Socket \d/);
+    expect(run.steps.some(step => step.layer === 'cooling')).toBe(true);
+    expect(errorMessages(run.final)).toEqual([]);
+  });
+  it('makes the room safer in a fire by swapping the water extinguisher', () => {
+    const run = runRules('Make the room safer in a fire', office);
+    expect(layers(run)).toEqual(['fire']);
+    expect(run.final.items.find(item => item.id === 'ext-1')?.extinguisher).toBe('co2');
+    expect(evaluate(run.final).issues.filter(issue => issue.rule.startsWith('extinguisher'))).toEqual([]);
+  });
+  it('re-plugs from an overloaded socket', () => {
+    const crowded = { ...office, items: office.items.map(item => item.id === 'fridge' || item.id === 'printer' ? { ...item, socketId: 's3', watts: item.watts + 1000 } : item) };
+    expect(errorMessages(crowded).some(message => message.startsWith('Socket 3 carries'))).toBe(true);
     const run = runRules('the sockets are overloaded', crowded);
     expect(errorMessages(run.final).filter(message => /carries/.test(message))).toEqual([]);
     expect(run.steps.some(step => step.layer === 'power')).toBe(true);
@@ -189,6 +254,18 @@ describe('rules fallback', () => {
     expect(asked).toMatchObject({ outcome: 'declined', steps: [], final: office });
     expect(asked.limits[0]).toMatch(/Fire code/);
     expect(asked.reply).toMatch(/^The checks find \d+ errors: /);
+  });
+  it('answers "Is this fire safe?" with the checks and a limit, and changes nothing', () => {
+    const asked = runRules('Is this fire safe?', office);
+    expect(asked).toMatchObject({ outcome: 'declined', steps: [], final: office });
+    expect(asked.limits[0]).toMatch(/not a fire risk assessment/);
+  });
+  it('runs the demo requests in order from each previous result, ending with no errors', () => {
+    let design = office;
+    for (const request of ['Fix every problem', 'Untangle the wiring', 'Add 2 desks and wire them up', 'Add a 2 kW space heater', 'Make the room safer in a fire', 'Make it as low carbon as possible', 'Is this fire safe?']) {
+      design = runRules(request, design).final;
+      expect(errorMessages(design), request).toEqual([]);
+    }
   });
 });
 
@@ -205,8 +282,8 @@ function endpoint(...replies: (Response | Error)[]) {
   }) as unknown as typeof fetch;
   return { fetcher, bodies };
 }
-const heaterAdd = { type: 'add', kind: 'heater', x: 2.83, z: -1.5, rotation: 270, socketId: 's1', why: 'Warms the office on a free socket.' };
-const goodFix = { reply: 'Added a heater with more cooling.', goals: ['power', 'cooling', 'fire'], limits: '', changes: [heaterAdd, { type: 'aircon', acId: 'ac-7100', why: 'Heat would reach 6,245 W, over 5,000 W cooling.' }, { type: 'extinguisher', itemId: 'ext-1', extinguisher: 'co2', why: 'Water is wrong near live electrics.' }] };
+const heaterAdd = { type: 'add', kind: 'heater', x: 4.85, z: 0.2, rotation: 270, socketId: 's6', why: 'Warms the office on a free socket.' };
+const goodFix = { reply: 'Added a heater with more cooling.', goals: ['power', 'cooling', 'fire'], limits: '', changes: [heaterAdd, { type: 'plug', itemId: 'kettle', socketId: 's8', why: 'Socket 7 carries 3,800 W, over its 2,990 W limit.' }, { type: 'aircon', acId: 'ac-10000', why: 'Heat would reach 9,825 W, over 8,000 W cooling.' }, { type: 'extinguisher', itemId: 'ext-1', extinguisher: 'co2', why: 'Water is wrong near live electrics.' }] };
 const overloaded = { reply: 'Added a heater.', goals: ['power'], limits: '', changes: [{ ...heaterAdd, socketId: 's3' }, { type: 'plug', itemId: 'coffee', socketId: 's3', why: 'Share the socket.' }] };
 
 describe('agent loop', () => {
@@ -214,13 +291,13 @@ describe('agent loop', () => {
     const { fetcher, bodies } = endpoint(answer(goodFix));
     const run = await runLabAgent('Add a space heater by the window', office, { fetcher });
     expect(run).toMatchObject({ source: 'agent', outcome: 'changed', attempts: 1, provider: 'LLM Foundry', model: 'gemini-test' });
-    expect(run.steps.map(step => step.layer)).toEqual(['space', 'cooling', 'fire']);
+    expect(run.steps.map(step => step.layer)).toEqual(['space', 'power', 'cooling', 'fire']);
     expect(run.steps[0].design.items.some(item => item.id === 'heater-1')).toBe(true);
-    expect(run.steps[2].design).toEqual(run.final);
-    expect(run.steps[1].numbers).toContain('Cooling capacity: 5,000 → 7,100 W');
+    expect(run.steps[3].design).toEqual(run.final);
+    expect(run.steps[2].numbers).toContain('Cooling capacity: 8,000 → 10,000 W');
     expect(run.limits).toEqual(['Lighting and windows are not modelled.']);
     expect(bodies[0].situation.items).toHaveLength(office.items.length);
-    expect(errorMessages(run.final)).toEqual(['Shelf holds 50 kg, over the 40 kg rating of MDF.']);
+    expect(errorMessages(run.final)).toEqual(['Desk 9 has a loose power cable across a walking route to a seat.', 'Desk 10 has a loose power cable across a walking route to a seat.', 'Desk 5 runs power and data in the same under-floor cover.', 'Shelf 1 holds 50 kg, over the 40 kg rating of MDF.']);
   });
   it('feeds problems back and accepts the corrected proposal', async () => {
     const { fetcher, bodies } = endpoint(answer(overloaded), answer(goodFix));
@@ -287,7 +364,7 @@ describe('server input', () => {
   it.each([
     ['empty request', (b: any) => { b.request = ' '; }], ['long request', (b: any) => { b.request = 'x'.repeat(301); }],
     ['bad x', (b: any) => { b.situation.items[0].x = 1e9; }], ['NaN watts', (b: any) => { b.situation.items[0].watts = null; }], ['unknown kind', (b: any) => { b.situation.items[0].kind = 'rocket'; }],
-    ['too many items', (b: any) => { b.situation.items = Array.from({ length: 61 }, (_, i) => ({ ...b.situation.items[0], id: `i${i}` })); }],
+    ['too many items', (b: any) => { b.situation.items = Array.from({ length: 81 }, (_, i) => ({ ...b.situation.items[0], id: `i${i}` })); }],
     ['long id', (b: any) => { b.situation.items[0].id = 'x'.repeat(65); }], ['unknown material', (b: any) => { b.situation.materials.desk = 'desk-gold'; }],
     ['unknown aircon', (b: any) => { b.situation.acId = 'ac-9'; }], ['duplicate ids', (b: any) => { b.situation.items[1].id = b.situation.items[0].id; }],
     ['wide room', (b: any) => { b.situation.room.width = 500; }], ['not an object', (b: any) => { b.situation = []; }],
@@ -308,8 +385,8 @@ describe('server input', () => {
 describe('isLabCheckProblem', () => {
   const designs = () => {
     const crowded = { ...office, items: office.items.map(item => item.id === 'fridge' || item.id === 'printer' || item.id === 'coffee' ? { ...item, socketId: 's3', watts: item.watts + 900 } : item) };
-    const messy = { ...applyChange(office, { type: 'add', kind: 'heater', x: 2.7, z: -2.1, socketId: 's2', why: '' }), acId: 'ac-3500', materials: { ...office.materials, shelf: 'shelf-steel' } };
-    const blocked = { ...office, items: [...office.items, ...[-2.9, -2.3, -1.7, -1.1, -0.5, 0.1, 0.7, 1.3, 1.9, 2.5].map((x, index) => ({ ...office.items.find(i => i.id === 'fridge')!, id: `wall-${index}`, name: `Wall ${index}`, x, z: 1.6, watts: 0 }))] };
+    const messy = { ...applyChange(office, { type: 'add', kind: 'heater', x: -4.85, z: 1.2, rotation: 270, socketId: 's2', why: '' }), acId: 'ac-3500', materials: { ...office.materials, shelf: 'shelf-steel' } };
+    const blocked = { ...office, items: [...office.items, ...[-4.7, -4.1, -3.5, -2.9, -2.3, -1.7, -1.1, -0.5, 0.1, 0.7, 1.3, 1.9, 2.5, 3.1, 3.7, 4.3].map((x, index) => ({ ...office.items.find(i => i.id === 'fridge')!, id: `wall-${index}`, name: `Wall ${index}`, x, z: 1.6, watts: 0 }))] };
     const floored = { ...office, items: office.items.map(item => item.id === 'desk-1' ? { ...item, channel: 'floor' as const, dataChannel: 'floor' as const } : item.id === 'chair-1' ? { ...item, x: 5 } : item) };
     return [office, crowded, messy, blocked, floored];
   };
@@ -346,7 +423,7 @@ describe('endpoint', () => {
     const response = await post(body('Add a space heater'));
     expect(response.status).toBe(200);
     const data = await response.json() as any;
-    expect(data.proposal.changes).toHaveLength(3);
+    expect(data.proposal.changes).toHaveLength(4);
     expect(calls[0]).toContain('socket-load');
     expect(calls[0]).toContain('ac-7100');
   });

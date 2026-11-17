@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CablePath, LabDesign, LabItem, LabReport, LabRoom, LabSocket, Wall } from './model';
 import { REACTION_S, WALK_SPEED } from './rules';
 
@@ -17,6 +18,15 @@ export interface DrillView {
   start: [number, number];
 }
 
+export interface LabPlay {
+  key: string;
+  from: LabDesign;
+  fromReport: LabReport;
+  durationMs: number;
+  focus: string[];
+  wiring: boolean;
+}
+
 export interface LabSceneState {
   design: LabDesign;
   report: LabReport;
@@ -26,6 +36,7 @@ export interface LabSceneState {
   highlight?: string[];
   changes?: { itemId: string; label: string }[];
   drill?: DrillView | null;
+  play?: LabPlay | null;
 }
 
 export interface LabSceneCallbacks {
@@ -34,6 +45,7 @@ export interface LabSceneCallbacks {
   onMoveSocket(id: string, x: number, z: number): void;
   onMoveVia(itemId: string, x: number, z: number): void;
   onPickCable?(itemId: string, kind: 'power' | 'data'): void;
+  onPlayDone?(key: string): void;
 }
 
 export interface LabScene {
@@ -75,10 +87,28 @@ const FLOOR_COLORS: Record<string, string> = { 'floor-vinyl': '#b3a48a', 'floor-
 const BOX_COLORS = ['#b88a5a', '#6f8f9a', '#c9b27a', '#8d6f8c'];
 const WALL_KINDS = new Set(['ac', 'router']);
 const SOFT_KINDS = new Set(['chair', 'router', 'ac']);
+const LOOK_END = 0.15;
+const MOVE_A = 0.15;
+const MOVE_B = 0.55;
+const WIRE_A = 0.45;
+const WIRE_B = 0.95;
+const GHOST_OPACITY = 0.8;
+const LOOK_ZOOM = 0.8;
+const PLAN_ZOOM = 1.15;
+const PLAN_PAN = 0.5;
+const SPARK_COLOR: Record<'power' | 'data', string> = { power: CHANGED, data: '#8fd0ff' };
 
 const snap = (v: number) => Math.round(v * SNAP_STEPS) / SNAP_STEPS;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const radians = (deg: number) => (deg * Math.PI) / 180;
+const smooth = (a: number, b: number, t: number) => {
+  const x = clamp((t - a) / (b - a), 0, 1);
+  return x * x * (3 - 2 * x);
+};
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+const turn = (from: number, to: number) => ((((to - from + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
+const structSig = (item: LabItem) => [item.kind, item.w, item.d, item.h, item.loadKg ?? 0, item.extinguisher ?? '', item.name].join('|');
+const cableSig = (cable: CablePath) => `${cable.kind}|${cable.channel}|${cable.itemId}|${cable.points.map((p) => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(';')}`;
 const extents = (item: LabItem) => (item.rotation === 90 || item.rotation === 270 ? { w: item.d, d: item.w } : { w: item.w, d: item.d });
 
 function nearestWall(room: LabRoom, x: number, z: number): Wall {
@@ -118,11 +148,11 @@ function loadColor(watts: number, limitW: number) {
 
 class XrayLayer {
   readonly edge = new THREE.LineBasicMaterial({ color: '#bfdcff', transparent: true, opacity: 0, toneMapped: false, depthWrite: false });
-  private entries = new Map<Mat, { color: THREE.Color; opacity: number }>();
+  private entries = new Map<Mat, { color: THREE.Color; opacity: number; fade: { v: number } }>();
   private t = 0;
 
-  add<T extends Mat>(material: T): T {
-    const entry = { color: material.color.clone(), opacity: material.opacity };
+  add<T extends Mat>(material: T, fade: { v: number } = { v: 1 }): T {
+    const entry = { color: material.color.clone(), opacity: material.opacity, fade };
     this.entries.set(material, entry);
     this.write(material, entry);
     return material;
@@ -132,6 +162,18 @@ class XrayLayer {
     this.entries.delete(material);
   }
 
+  refresh(material: Mat) {
+    const entry = this.entries.get(material);
+    if (entry) this.write(material, entry);
+  }
+
+  setBase(material: Mat, color: THREE.Color) {
+    const entry = this.entries.get(material);
+    if (!entry) return;
+    entry.color.copy(color);
+    this.write(material, entry);
+  }
+
   set(t: number) {
     this.t = t;
     this.entries.forEach((entry, material) => this.write(material, entry));
@@ -139,14 +181,14 @@ class XrayLayer {
     this.edge.opacity = 0.8 * t;
   }
 
-  private write(material: Mat, entry: { color: THREE.Color; opacity: number }) {
-    const transparent = this.t > 0.001 || entry.opacity < 1;
+  private write(material: Mat, entry: { color: THREE.Color; opacity: number; fade: { v: number } }) {
+    const transparent = this.t > 0.001 || entry.opacity < 1 || entry.fade.v < 1;
     if (material.transparent !== transparent) {
       material.transparent = transparent;
       material.needsUpdate = true;
     }
-    material.opacity = THREE.MathUtils.lerp(entry.opacity, Math.min(entry.opacity, XRAY_ALPHA), this.t);
-    material.depthWrite = this.t < 0.5;
+    material.opacity = THREE.MathUtils.lerp(entry.opacity, Math.min(entry.opacity, XRAY_ALPHA), this.t) * entry.fade.v;
+    material.depthWrite = this.t < 0.5 && entry.fade.v > 0.98;
     material.color.copy(entry.color).lerp(XRAY_TINT, 0.45 * this.t);
   }
 }
@@ -155,6 +197,7 @@ class Parts {
   readonly root = new THREE.Group();
   private mats: Mat[] = [];
   private raws: THREE.Material[] = [];
+  readonly fade = { v: 1 };
   private xray: XrayLayer;
 
   constructor(xray: XrayLayer) {
@@ -162,9 +205,24 @@ class Parts {
   }
 
   mat(color: string, o: MatOptions = {}) {
-    const material = this.xray.add(new THREE.MeshStandardMaterial({ color, roughness: o.roughness ?? 0.75, metalness: o.metalness ?? 0, emissive: o.emissive ?? '#000000', emissiveIntensity: o.emissiveIntensity ?? 1 }));
+    const material = this.xray.add(new THREE.MeshStandardMaterial({ color, roughness: o.roughness ?? 0.75, metalness: o.metalness ?? 0, emissive: o.emissive ?? '#000000', emissiveIntensity: o.emissiveIntensity ?? 1 }), this.fade);
+    material.userData.hex = color;
     this.mats.push(material);
     return material;
+  }
+
+  setFade(v: number) {
+    if (this.fade.v === v) return;
+    this.fade.v = v;
+    this.mats.forEach((material) => this.xray.refresh(material));
+  }
+
+  recolor(to: string, from: string, t: number) {
+    const target = new THREE.Color(to);
+    const color = new THREE.Color(from).lerp(target, t);
+    this.mats.forEach((material) => {
+      if (material.userData.hex === to) this.xray.setBase(material, color);
+    });
   }
 
   raw<T extends THREE.Material>(material: T): T {
@@ -223,10 +281,55 @@ class PolyCurve extends THREE.Curve<THREE.Vector3> {
   }
 }
 
+const RADIAL = 6;
+
+function cleanPoints(points: THREE.Vector3[]) {
+  return points.filter((p, i) => i === 0 || p.distanceTo(points[i - 1]) > 1e-4);
+}
+
 function tubeGeometry(points: THREE.Vector3[], radius: number) {
-  const clean = points.filter((p, i) => i === 0 || p.distanceTo(points[i - 1]) > 1e-4);
+  const clean = cleanPoints(points);
   if (clean.length < 2) return new THREE.BufferGeometry();
-  return new THREE.TubeGeometry(new PolyCurve(clean), clean.length - 1, radius, 6, false);
+  return new THREE.TubeGeometry(new PolyCurve(clean), clean.length - 1, radius, RADIAL, false);
+}
+
+function pathMarks(clean: THREE.Vector3[]) {
+  const cum = [0];
+  for (let i = 1; i < clean.length; i++) cum.push(cum[i - 1] + clean[i].distanceTo(clean[i - 1]));
+  return cum;
+}
+
+function pathAt(clean: THREE.Vector3[], cum: number[], fraction: number) {
+  const total = cum[cum.length - 1];
+  const at = clamp(fraction, 0, 1) * total;
+  let i = 0;
+  while (i < clean.length - 2 && at > cum[i + 1]) i++;
+  const run = cum[i + 1] - cum[i];
+  const f = run > 0 ? clamp((at - cum[i]) / run, 0, 1) : 0;
+  return { pos: new THREE.Vector3().lerpVectors(clean[i], clean[i + 1], f), seg: i + f };
+}
+
+function dashedGeometry(points: THREE.Vector3[], radius: number) {
+  const clean = cleanPoints(points);
+  if (clean.length < 2) return new THREE.BufferGeometry();
+  const cum = pathMarks(clean);
+  const total = cum[cum.length - 1];
+  const parts: THREE.BufferGeometry[] = [];
+  const dash = 0.1;
+  const gap = 0.07;
+  for (let a = 0; a < total; a += dash + gap) {
+    const b = Math.min(total, a + dash);
+    const pts = [pathAt(clean, cum, a / total).pos];
+    clean.forEach((p, i) => {
+      if (cum[i] > a && cum[i] < b) pts.push(p);
+    });
+    pts.push(pathAt(clean, cum, b / total).pos);
+    const geo = tubeGeometry(pts, radius);
+    if (geo.index) parts.push(geo);
+  }
+  const merged = parts.length ? mergeGeometries(parts) : null;
+  parts.forEach((geo) => geo.dispose());
+  return merged ?? new THREE.BufferGeometry();
 }
 
 function pointAlong(points: Pt[], fraction: number): Pt {
@@ -532,8 +635,38 @@ function buildRoom(xray: XrayLayer, room: LabRoom, floorId: string): RoomView {
 
 interface ItemView { sig: string; parts: Parts; group: THREE.Group; hull: THREE.Mesh; halo: THREE.Mesh | null; label: THREE.Sprite | null }
 interface SocketView { parts: Parts; group: THREE.Group; ring: THREE.MeshBasicMaterial; glow: THREE.MeshBasicMaterial; marker: THREE.Mesh; wall: Wall }
-interface CableView { sig: string; group: THREE.Group; thick: THREE.Mesh; thin: THREE.Mesh; hit: THREE.Mesh; thickMat: THREE.MeshBasicMaterial; thinMat: THREE.MeshBasicMaterial; channel: string; kind: 'power' | 'data'; itemId: string; mid: Pt }
+interface CableView { sig: string; group: THREE.Group; thick: THREE.Mesh; thin: THREE.Mesh; hit: THREE.Mesh; thickMat: THREE.MeshBasicMaterial; thinMat: THREE.MeshBasicMaterial; channel: string; kind: 'power' | 'data'; itemId: string; mid: Pt; clean: THREE.Vector3[]; cum: number[] }
 interface CircuitView { sig: string; group: THREE.Group; mats: THREE.MeshBasicMaterial[]; sprites: THREE.Sprite[]; geos: THREE.BufferGeometry[] }
+interface Ghost { id: string; parts: Parts; group: THREE.Group; kind: 'removed' | 'swap'; y: number }
+interface CableGhost { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; loose: boolean }
+interface Spark { core: THREE.Mesh; halo: THREE.Sprite; loose: boolean }
+interface Ring { group: THREE.Group; ring: THREE.MeshBasicMaterial; disc: THREE.MeshBasicMaterial; itemId: string | null; at: THREE.Vector3 | null; radius: number }
+interface PlayRun {
+  play: LabPlay;
+  design: LabDesign;
+  start: number;
+  dur: number;
+  t: number;
+  reduced: boolean;
+  fromItems: Map<string, LabItem>;
+  rotFrom: Map<string, number>;
+  rotTo: Map<string, number>;
+  fresh: Set<string>;
+  swap: Set<string>;
+  ghosts: Ghost[];
+  cableGhosts: CableGhost[];
+  sparks: Map<string, Spark>;
+  rings: Ring[];
+  changed: Set<string>;
+  fromColors: Map<string, string>;
+  fromSocket: Map<string, string | null>;
+  toSocket: Map<string, string | null>;
+  deskColors: [string, string];
+  shelfColors: [string, string];
+  floorColors: [string, string];
+  camera: { mode: LabViewMode; target0: THREE.Vector3; target1: THREE.Vector3; offset: THREE.Vector3; factor: number; zoom0: number; zoom1: number; x0: number; z0: number; x1: number; z1: number } | null;
+  lookDone: boolean;
+}
 interface DragState { type: 'item' | 'socket' | 'via'; id: string; planeY: number; offX: number; offZ: number; wall: Wall | null; last: string }
 
 function itemOrientation(item: LabItem, design: LabDesign) {
@@ -600,7 +733,12 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
   let current: LabDesign | null = null;
   let mode: LabViewMode = 'orbit';
   let xrayOn = false;
+  let xrayBase = false;
+  let xrayBaseT = 0;
+  let forceT = 0;
   let xrayT = 0;
+  let playRun: PlayRun | null = null;
+  let lastPlayKey: string | null = null;
   let selectedId: string | null = null;
   let highlighted = new Set<string>();
   let changed = new Set<string>();
@@ -622,6 +760,9 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
   const socketColors = new Map<string, string>();
   const handleMat = new THREE.MeshBasicMaterial({ color: GOLD, toneMapped: false });
   const handleGeo = new THREE.SphereGeometry(0.055, 14, 10);
+  const sparkGeo = new THREE.SphereGeometry(0.07, 16, 12);
+  const ringGeo = new THREE.RingGeometry(0.84, 1, 48).rotateX(-Math.PI / 2);
+  const discGeo = new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2);
 
   function roomOrDefault(): LabRoom {
     return current?.room ?? { width: 6, depth: 5, height: 2.7, door: { x: 0, width: 0.9 }, dataPoint: { wall: 'back', x: 0, z: -2.5 } };
@@ -719,9 +860,19 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
       const turned = item.rotation === 90 || item.rotation === 270;
       const hw = (turned ? item.d : item.w) / 2;
       const hd = (turned ? item.w : item.d) / 2;
-      sprite.position.set(item.x + hw, (WALL_KINDS.has(item.kind) ? mountHeight(item) : 0) + item.h + 0.3, item.z - hd);
+      sprite.userData.itemId = item.id;
+      sprite.userData.offset = new THREE.Vector3(hw, item.h + 0.3, -hd);
+      sprite.userData.base = new THREE.Vector3(item.x, WALL_KINDS.has(item.kind) ? mountHeight(item) : 0, item.z);
       world.add(sprite);
       badges.push(sprite);
+    });
+    placeBadges();
+  }
+
+  function placeBadges() {
+    badges.forEach((sprite) => {
+      const base = itemViews.get(sprite.userData.itemId)?.group.position ?? (sprite.userData.base as THREE.Vector3);
+      sprite.position.copy(base).add(sprite.userData.offset as THREE.Vector3);
     });
   }
 
@@ -729,7 +880,7 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
     const seen = new Set<string>();
     design.items.forEach((item) => {
       seen.add(item.id);
-      const sig = [item.kind, item.w, item.d, item.h, item.loadKg ?? 0, item.extinguisher ?? '', item.name, design.materials.desk, design.materials.shelf].join('|');
+      const sig = `${structSig(item)}|${design.materials.desk}|${design.materials.shelf}`;
       let view = itemViews.get(item.id);
       if (!view || view.sig !== sig) {
         if (view) disposeItemView(view);
@@ -813,7 +964,8 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
     hit.userData.pick = { type: 'cable', id: cable.itemId, cableKind: cable.kind } satisfies Pick;
     group.add(thick, thin, hit);
     world.add(group);
-    return { sig, group, thick, thin, hit, thickMat, thinMat, channel: cable.channel, kind: cable.kind, itemId: cable.itemId, mid: pointAlong(cable.points, 0.5) };
+    const clean = cleanPoints(pts);
+    return { sig, group, thick, thin, hit, thickMat, thinMat, channel: cable.channel, kind: cable.kind, itemId: cable.itemId, mid: pointAlong(cable.points, 0.5), clean, cum: pathMarks(clean) };
   }
 
   function disposeCableView(view: CableView) {
@@ -1039,6 +1191,7 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
     const aspect = size.w / Math.max(1, size.h);
     const halfH = Math.max((r.depth + 1.4) / 2, (r.width + 1.4) / 2 / aspect);
     Object.assign(planCamera, { left: -halfH * aspect, right: halfH * aspect, top: halfH, bottom: -halfH });
+    planCamera.zoom = 1;
     planCamera.up.set(0, 0, -1);
     planCamera.position.set(0, 20, 0);
     planCamera.lookAt(0, 0, 0);
@@ -1088,6 +1241,7 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
     orbitCamera.updateProjectionMatrix();
     walkCamera.updateProjectionMatrix();
     fitPlan();
+    renderer.render(scene, camera);
   }
 
   const observer = new ResizeObserver(resize);
@@ -1265,6 +1419,12 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
     keys.delete(e.code);
   }
 
+  let awakeUntil = 0;
+  let tick = 0;
+  const wake = (ms = 800) => { awakeUntil = Math.max(awakeUntil, performance.now() + ms); };
+  ['pointerdown', 'pointermove', 'wheel'].forEach((name) => dom.addEventListener(name, () => wake(), { passive: true }));
+  controls.addEventListener('change', () => wake());
+  window.addEventListener('keydown', () => wake());
   dom.addEventListener('pointerdown', onDown, { capture: true });
   dom.addEventListener('pointermove', onMove);
   dom.addEventListener('pointerup', onUp);
@@ -1380,36 +1540,376 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
     drillState.flame.scale.set(flicker, 0.9 + 0.3 * Math.abs(Math.sin(clock * 11)), flicker);
   }
 
+  function setProgress(view: CableView, p: number) {
+    [view.thick, view.thin, view.hit].forEach((mesh) => {
+      const total = mesh.geometry.index?.count;
+      if (!total) return;
+      if (p >= 1) return mesh.geometry.setDrawRange(0, Infinity);
+      const seg = p <= 0 ? 0 : pathAt(view.clean, view.cum, p).seg;
+      mesh.geometry.setDrawRange(0, Math.floor(((seg / (view.clean.length - 1)) * total) / 3) * 3);
+    });
+  }
+
+  function groupFor(run: PlayRun, id: string) {
+    return itemViews.get(id)?.group ?? run.ghosts.find((g) => g.id === id)?.group ?? null;
+  }
+
+  function buildGhost(item: LabItem, design: LabDesign, kind: Ghost['kind']): Ghost {
+    const parts = new Parts(xray);
+    buildItem(parts, item, design);
+    const group = new THREE.Group();
+    group.add(parts.root);
+    const y = WALL_KINDS.has(item.kind) ? mountHeight(item) : 0;
+    group.position.set(item.x, y, item.z);
+    group.rotation.y = itemOrientation(item, design);
+    world.add(group);
+    return { id: item.id, parts, group, kind, y };
+  }
+
+  function makeRing(radius: number, itemId: string | null, at: THREE.Vector3 | null): Ring {
+    const ring = new THREE.MeshBasicMaterial({ color: CHANGED, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+    const disc = new THREE.MeshBasicMaterial({ color: CHANGED, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+    const group = new THREE.Group();
+    const a = new THREE.Mesh(ringGeo, ring);
+    const b = new THREE.Mesh(discGeo, disc);
+    a.renderOrder = 4;
+    b.renderOrder = 3;
+    group.add(a, b);
+    group.visible = false;
+    world.add(group);
+    return { group, ring, disc, itemId, at, radius };
+  }
+
+  function beginPlay(play: LabPlay, design: LabDesign, report: LabReport) {
+    const reduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const now = performance.now();
+    const fromItems = new Map(play.from.items.map((item) => [item.id, item]));
+    const rotFrom = new Map<string, number>();
+    const rotTo = new Map<string, number>();
+    const fresh = new Set<string>();
+    const swap = new Set<string>();
+    const ghosts: Ghost[] = [];
+    design.items.forEach((item) => {
+      rotTo.set(item.id, itemOrientation(item, design));
+      const prev = fromItems.get(item.id);
+      if (!prev) return fresh.add(item.id);
+      rotFrom.set(item.id, itemOrientation(prev, play.from));
+      if (structSig(prev) !== structSig(item)) {
+        swap.add(item.id);
+        ghosts.push(buildGhost(prev, play.from, 'swap'));
+      }
+    });
+    const kept = new Set(design.items.map((item) => item.id));
+    play.from.items.forEach((item) => {
+      if (!kept.has(item.id)) ghosts.push(buildGhost(item, play.from, 'removed'));
+    });
+
+    const fromColors = new Map(play.fromReport.meters.sockets.map((sock) => [sock.socketId, loadColor(sock.watts, sock.limitW)]));
+    const fromCables = new Map(play.fromReport.cables.map((cable) => [cable.id, cable]));
+    const changed = new Set<string>();
+    const cableGhosts: CableGhost[] = [];
+    const finalIds = new Set<string>();
+    report.cables.forEach((cable) => {
+      finalIds.add(cable.id);
+      const prev = fromCables.get(cable.id);
+      if (!prev || cableSig(prev) !== cableSig(cable)) changed.add(cable.id);
+    });
+    fromCables.forEach((prev, id) => {
+      if (finalIds.has(id) && !changed.has(id)) return;
+      const color = prev.kind === 'data' ? DATA_COLOR : fromColors.get(fromItems.get(prev.itemId)?.socketId ?? '') ?? '#e6edf2';
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+      const mesh = new THREE.Mesh(dashedGeometry(cableVectors(prev, play.from.room), prev.kind === 'data' ? 0.01 : 0.013), mat);
+      mesh.renderOrder = 6;
+      mesh.visible = false;
+      world.add(mesh);
+      cableGhosts.push({ mesh, mat, loose: prev.channel === 'loose' });
+    });
+
+    const sparks = new Map<string, Spark>();
+    if (!reduced) {
+      changed.forEach((id) => {
+        const view = cableViews.get(id);
+        if (!view) return;
+        const color = SPARK_COLOR[view.kind];
+        const core = new THREE.Mesh(sparkGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, depthTest: false, toneMapped: false }));
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, transparent: true, opacity: 0, depthTest: false, depthWrite: false, toneMapped: false }));
+        halo.scale.set(0.8, 0.8, 1);
+        core.renderOrder = 31;
+        halo.renderOrder = 30;
+        core.visible = false;
+        halo.visible = false;
+        world.add(core, halo);
+        sparks.set(id, { core, halo, loose: view.channel === 'loose' });
+      });
+    }
+
+    const rings: Ring[] = [];
+    const spots: Pt[] = [];
+    play.focus.forEach((id) => {
+      const item = design.items.find((each) => each.id === id) ?? fromItems.get(id);
+      if (!item) return;
+      spots.push([item.x, item.z]);
+      const e = extents(item);
+      rings.push(makeRing(Math.hypot(e.w, e.d) / 2 + 0.2, id, null));
+      if (!play.wiring) return;
+      const live = design.items.find((each) => each.id === id);
+      const socket = live ? design.sockets.find((sock) => sock.id === live.socketId) : null;
+      if (socket && changed.has(`${id}-power`)) spots.push([socket.x, socket.z]);
+      if (socket && changed.has(`${id}-power`)) rings.push(makeRing(0.35, null, wallPosition(design.room, socket.wall, socket.x, socket.z, 0.02, 0.22)));
+      if (live?.data && changed.has(`${id}-data`)) {
+        const dp = design.room.dataPoint;
+        spots.push([dp.x, dp.z]);
+        rings.push(makeRing(0.35, null, wallPosition(design.room, dp.wall, dp.x, dp.z, 0.02, 0.22)));
+      }
+    });
+
+    let cam: PlayRun['camera'] = null;
+    if (!reduced && spots.length && mode !== 'walk') {
+      const cx = spots.reduce((sum, p) => sum + p[0], 0) / spots.length;
+      const cz = spots.reduce((sum, p) => sum + p[1], 0) / spots.length;
+      if (mode === 'orbit') {
+        const offset = orbitCamera.position.clone().sub(controls.target);
+        const len = offset.length();
+        const goal = Math.max(controls.minDistance, len * LOOK_ZOOM);
+        cam = { mode, target0: controls.target.clone(), target1: new THREE.Vector3(cx, 0.5, cz), offset, factor: len > 0 ? goal / len : 1, zoom0: 1, zoom1: 1, x0: 0, z0: 0, x1: 0, z1: 0 };
+      } else {
+        const zoom0 = planCamera.zoom;
+        const zoom1 = Math.min(zoom0 * PLAN_ZOOM, 2.5);
+        const x0 = planCamera.position.x;
+        const z0 = planCamera.position.z;
+        cam = { mode, target0: new THREE.Vector3(), target1: new THREE.Vector3(), offset: new THREE.Vector3(), factor: 1, zoom0, zoom1, x0, z0, x1: mix(x0, cx, PLAN_PAN), z1: mix(z0, cz, PLAN_PAN) };
+      }
+    }
+
+    const pair = (table: Record<string, string>, a: string, b: string, fallback: string): [string, string] => [table[a] ?? fallback, table[b] ?? fallback];
+    playRun = {
+      play,
+      design,
+      start: now,
+      dur: Math.max(300, play.durationMs) / (reduced ? 3 : 1),
+      t: 0,
+      reduced,
+      fromItems,
+      rotFrom,
+      rotTo,
+      fresh,
+      swap,
+      ghosts,
+      cableGhosts,
+      sparks,
+      rings,
+      changed,
+      fromColors,
+      fromSocket: new Map(play.from.items.map((item) => [item.id, item.socketId])),
+      toSocket: new Map(design.items.map((item) => [item.id, item.socketId])),
+      deskColors: pair(DESK_COLORS, play.from.materials.desk, design.materials.desk, '#d9d2c3'),
+      shelfColors: pair(SHELF_COLORS, play.from.materials.shelf, design.materials.shelf, '#c9a574'),
+      floorColors: pair(FLOOR_COLORS, play.from.materials.floor, design.materials.floor, '#b3a48a'),
+      camera: cam,
+      lookDone: false,
+    };
+    applyRun(playRun, 0);
+  }
+
+  function applyLook(run: PlayRun, t: number) {
+    const c = run.camera;
+    if (!c || c.mode !== mode) return;
+    const s = t < LOOK_END ? smooth(0, LOOK_END, t) : t > 0.82 ? 1 - smooth(0.82, 1, t) : 1;
+    if (c.mode === 'orbit') {
+      controls.target.lerpVectors(c.target0, c.target1, s);
+      orbitCamera.position.copy(controls.target).addScaledVector(c.offset, mix(1, c.factor, s));
+    } else {
+      planCamera.zoom = mix(c.zoom0, c.zoom1, s);
+      planCamera.position.x = mix(c.x0, c.x1, s);
+      planCamera.position.z = mix(c.z0, c.z1, s);
+      planCamera.updateProjectionMatrix();
+    }
+  }
+
+  const tmpA = new THREE.Color();
+  const tmpB = new THREE.Color();
+
+  function applyRun(run: PlayRun, t: number) {
+    const done = t >= 1;
+    const m = smooth(MOVE_A, MOVE_B, t);
+    const w = smooth(WIRE_A, WIRE_B, t);
+    run.design.items.forEach((item) => {
+      const view = itemViews.get(item.id);
+      if (!view) return;
+      const prev = run.fromItems.get(item.id);
+      const y = WALL_KINDS.has(item.kind) ? mountHeight(item) : 0;
+      const rot1 = run.rotTo.get(item.id)!;
+      if (prev && !done) {
+        const rot0 = run.rotFrom.get(item.id)!;
+        view.group.position.set(mix(prev.x, item.x, m), y, mix(prev.z, item.z, m));
+        view.group.rotation.y = rot0 + turn(rot0, rot1) * m;
+      } else {
+        view.group.position.set(item.x, y, item.z);
+        view.group.rotation.y = rot1;
+      }
+      const rising = run.fresh.has(item.id) || run.swap.has(item.id);
+      const grow = done ? 1 : m;
+      view.parts.setFade(rising ? grow : 1);
+      view.group.scale.y = run.fresh.has(item.id) ? Math.max(0.001, grow) : 1;
+      if (run.deskColors[0] !== run.deskColors[1] && item.kind === 'desk') view.parts.recolor(run.deskColors[1], run.deskColors[0], m);
+      if (run.shelfColors[0] !== run.shelfColors[1] && item.kind === 'shelf') view.parts.recolor(run.shelfColors[1], run.shelfColors[0], m);
+    });
+    if (room && run.floorColors[0] !== run.floorColors[1]) room.parts.recolor(run.floorColors[1], run.floorColors[0], m);
+
+    run.ghosts.forEach((ghost) => {
+      ghost.parts.setFade(1 - m);
+      ghost.group.visible = m < 1;
+      if (ghost.kind === 'swap') {
+        const live = itemViews.get(ghost.id)?.group;
+        if (live) {
+          ghost.group.position.copy(live.position);
+          ghost.group.rotation.y = live.rotation.y;
+        }
+      } else {
+        ghost.group.scale.y = 1 - 0.85 * m;
+        ghost.group.position.y = ghost.y - 0.15 * m;
+      }
+    });
+
+    socketViews.forEach((view, id) => {
+      const to = socketColors.get(id) ?? LOAD_COLORS.ok;
+      const color = tmpA.set(run.fromColors.get(id) ?? to).lerp(tmpB.set(to), m);
+      view.ring.color.copy(color);
+      view.glow.color.copy(color);
+      (view.marker.material as THREE.MeshBasicMaterial).color.copy(color);
+    });
+    cableViews.forEach((view) => {
+      if (view.kind !== 'power') return;
+      const to = socketColors.get(run.toSocket.get(view.itemId) ?? '') ?? '#cfd6dd';
+      const from = run.fromColors.get(run.fromSocket.get(view.itemId) ?? '') ?? to;
+      view.thickMat.color.copy(tmpA.set(from).lerp(tmpB.set(to), m));
+    });
+
+    run.changed.forEach((id) => {
+      const view = cableViews.get(id);
+      if (!view) return;
+      setProgress(view, done ? 1 : w);
+      const spark = run.sparks.get(id);
+      if (!spark) return;
+      const gate = spark.loose ? 1 : xrayT;
+      const op = smooth(WIRE_A, WIRE_A + 0.05, t) * (1 - smooth(WIRE_B, 1, t)) * gate;
+      const on = !done && op > 0.01 && view.clean.length > 1;
+      spark.core.visible = on;
+      spark.halo.visible = on;
+      if (!on) return;
+      const at = pathAt(view.clean, view.cum, w).pos;
+      const pulse = 1 + 0.25 * Math.sin(clock * 18);
+      spark.core.position.copy(at);
+      spark.halo.position.copy(at);
+      spark.core.scale.setScalar(pulse);
+      spark.halo.scale.set(0.8 * pulse, 0.8 * pulse, 1);
+      (spark.core.material as THREE.MeshBasicMaterial).opacity = op;
+      (spark.halo.material as THREE.SpriteMaterial).opacity = op * 0.85;
+    });
+
+    const ghostFade = smooth(0, 0.1, t) * (1 - smooth(0.6, WIRE_B, t));
+    run.cableGhosts.forEach((ghost) => {
+      const op = GHOST_OPACITY * ghostFade * (ghost.loose ? 1 : xrayT);
+      ghost.mat.opacity = op;
+      ghost.mesh.visible = op > 0.005;
+    });
+
+    const env = smooth(0, 0.12, t) * (1 - smooth(0.88, 1, t));
+    const phase = run.reduced ? 0.5 : ((t * run.dur) / 1000 / 1.1) % 1;
+    run.rings.forEach((ring) => {
+      const group = ring.itemId ? groupFor(run, ring.itemId) : null;
+      if (group) ring.group.position.set(group.position.x, 0.015, group.position.z);
+      else if (ring.at) ring.group.position.copy(ring.at);
+      ring.group.visible = env > 0.01;
+      ring.group.scale.setScalar(ring.radius * (0.9 + 0.3 * phase));
+      ring.ring.opacity = env * 0.75 * (1 - phase);
+      ring.disc.opacity = env * 0.16;
+    });
+
+    forceT = run.play.wiring && !done ? Math.min(smooth(0, 0.15, t), 1 - smooth(0.9, 1, t)) : 0;
+    xrayOn = xrayBase || forceT > 0.01;
+    placeBadges();
+  }
+
+  function finishRun(notify: boolean) {
+    const run = playRun;
+    if (!run) return;
+    applyLook(run, 1);
+    applyRun(run, 1);
+    playRun = null;
+    run.ghosts.forEach((ghost) => {
+      ghost.parts.dispose();
+      ghost.group.removeFromParent();
+    });
+    run.cableGhosts.forEach((ghost) => {
+      ghost.mesh.removeFromParent();
+      ghost.mesh.geometry.dispose();
+      ghost.mat.dispose();
+    });
+    run.sparks.forEach((spark) => {
+      spark.core.removeFromParent();
+      spark.halo.removeFromParent();
+      (spark.core.material as THREE.Material).dispose();
+      spark.halo.material.dispose();
+    });
+    run.rings.forEach((ring) => {
+      ring.group.removeFromParent();
+      ring.ring.dispose();
+      ring.disc.dispose();
+    });
+    applyFade();
+    shadowDirty();
+    if (notify) callbacks.onPlayDone?.(run.play.key);
+  }
+
   function frame(now: number) {
     if (disposed) return;
     raf = requestAnimationFrame(frame);
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     clock += dt;
-    const target = xrayOn ? 1 : 0;
-    const before = xrayT;
-    xrayT = xrayT < target ? Math.min(target, xrayT + dt / XRAY_SECONDS) : Math.max(target, xrayT - dt / XRAY_SECONDS);
-    if (before !== xrayT) applyFade();
+    if (playRun) {
+      const run = playRun;
+      run.t = clamp((now - run.start) / run.dur, 0, 1);
+      applyLook(run, run.t);
+      applyRun(run, run.t);
+      if (run.t >= 1) finishRun(true);
+    }
+    const target = xrayBase ? 1 : 0;
+    xrayBaseT = xrayBaseT < target ? Math.min(target, xrayBaseT + dt / XRAY_SECONDS) : Math.max(target, xrayBaseT - dt / XRAY_SECONDS);
+    const next = Math.max(xrayBaseT, forceT);
+    if (next !== xrayT || playRun) {
+      xrayT = next;
+      applyFade();
+    }
     stepWalk(dt);
     stepWalls(dt);
     applyHighlights();
     if (drillGroup.visible) applyDrill();
     if (camera === orbitCamera) controls.update();
-    renderer.render(scene, camera);
+    tick += 1;
+    const moving = playRun !== null || xrayT !== target || keys.size > 0 || drillGroup.visible || now < awakeUntil;
+    const pulsing = highlighted.size > 0 || changed.size > 0;
+    if (moving || (pulsing && tick % 3 === 0)) renderer.render(scene, camera);
   }
   raf = requestAnimationFrame(frame);
 
   return {
     update(state) {
+      wake();
+      const play = state.play ?? null;
+      if (playRun && (!play || play.key !== playRun.play.key)) finishRun(false);
       current = state.design;
-      xrayOn = state.xray;
+      xrayBase = state.xray;
+      xrayOn = xrayBase || forceT > 0.01;
       selectedId = state.selectedId;
       highlighted = new Set(state.highlight ?? []);
       changed = new Set((state.changes ?? []).map((change) => change.itemId));
-      syncBadges(state.design, state.changes ?? []);
       socketColorMap(state.report);
       syncRoom(state.design);
       syncItems(state.design);
+      syncBadges(state.design, state.changes ?? []);
+      placeBadges();
       syncSockets(state.design);
       syncCables(state.design, state.report);
       syncCircuits(state.design);
@@ -1417,6 +1917,13 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
       setMode(state.mode);
       controls.enabled = mode === 'orbit' && !drag;
       applyModeVisibility();
+      if (play && play.key !== lastPlayKey) {
+        lastPlayKey = play.key;
+        beginPlay(play, state.design, state.report);
+        xrayT = Math.max(xrayBaseT, forceT);
+      } else if (playRun) {
+        applyRun(playRun, playRun.t);
+      }
       applyFade();
     },
     resetView,
@@ -1425,6 +1932,7 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
       return dom.toDataURL('image/png');
     },
     dispose() {
+      finishRun(false);
       disposed = true;
       cancelAnimationFrame(raf);
       observer.disconnect();
@@ -1441,6 +1949,9 @@ export function createLabScene(container: HTMLElement, callbacks: LabSceneCallba
       cableViews.forEach(disposeCableView);
       disposeCircuits();
       handleGeo.dispose();
+      sparkGeo.dispose();
+      ringGeo.dispose();
+      discGeo.dispose();
       handleMat.dispose();
       drillState.layers.forEach((m) => {
         m.geometry.dispose();
