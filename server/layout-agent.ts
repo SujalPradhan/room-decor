@@ -10,8 +10,8 @@ export { LayoutAgentError };
 export interface LayoutAgentConfig { foundryToken?: string; aipipeToken?: string; foundryModel?: string; aipipeModel?: string }
 /** preferBackup: an earlier attempt of this request already fell back, so skip the primary provider's wait. */
 export interface LayoutAgentInput { request: string; situation: AgentSituation; previous?: AgentPrevious; preferBackup?: true }
-interface Completion { text: string; provider: string; model: string }
-type Provider = (system: string, user: string, signal: AbortSignal) => Promise<Completion>;
+export interface Completion { text: string; provider: string; model: string }
+export type Provider = (system: string, user: string, signal: AbortSignal) => Promise<Completion>;
 
 /**
  * One request never outlives the browser's share of its 30 s deadline, failover included.

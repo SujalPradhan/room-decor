@@ -1,3 +1,4 @@
+import { askLabModel, labProviders, LabAgentError, readLabAgentInput, type LabAgentInput } from "./lab-agent";
 import { askLayoutModel, layoutProviders, readLayoutAgentInput, LayoutAgentError, type LayoutAgentInput } from "./layout-agent";
 import { handlePipelineRequest } from "./local-pipeline";
 import type {
@@ -575,6 +576,38 @@ async function layoutAgent(request: Request, url: URL, env: StudioEnv) {
   }
 }
 
+/**
+ * Design Lab agent: the same switches, providers and site budget as the room agent. The browser runs the checks.
+ */
+async function labAgent(request: Request, url: URL, env: StudioEnv) {
+  if (env.STUDIO_LAYOUT_AGENT_ENABLED !== "true" || (env.STUDIO_LAYOUT_AGENT_PUBLIC !== "true" && !["127.0.0.1", "localhost"].includes(url.hostname)))
+    throw new StudioError(503, "LAB_AGENT_UNAVAILABLE", "The lab agent is not available here.");
+  let input: LabAgentInput;
+  try { input = readLabAgentInput(await readJson(request)); }
+  catch (error) {
+    if (error instanceof LabAgentError) throw new StudioError(400, error.code === "INVALID_REQUEST" ? "INVALID_REQUEST" : "INVALID_SITUATION", error.message);
+    throw error;
+  }
+  let providers: ReturnType<typeof labProviders>;
+  try { providers = labProviders({ foundryToken: env.FOUNDRY_API_KEY, aipipeToken: env.AIPIPE_API_KEY, foundryModel: env.LAYOUT_AGENT_FOUNDRY_MODEL, aipipeModel: env.LAYOUT_AGENT_AIPIPE_MODEL }); }
+  catch { throw new StudioError(503, "LAB_AGENT_UNAVAILABLE", "The lab agent is not available here."); }
+  let budget: { fetch(url: string): Promise<Response> } | undefined;
+  if (env.STUDIO_LAYOUT_AGENT_PUBLIC === "true") {
+    if (!env.LAYOUT_AGENT_BUDGET)
+      throw new StudioError(503, "LAB_AGENT_UNAVAILABLE", "The lab agent is not available here.");
+    budget = env.LAYOUT_AGENT_BUDGET.get(env.LAYOUT_AGENT_BUDGET.idFromName("site") as never);
+    if (!(await budget.fetch("https://budget/spend")).ok)
+      throw new StudioError(429, "LAB_AGENT_BUSY", "The lab agent is busy. Try again later.");
+  }
+  try {
+    return json(await askLabModel(input, providers, request.signal));
+  } catch (error) {
+    if (error instanceof LabAgentError && error.code === "PROVIDER_REFUSED") await budget?.fetch("https://budget/refund").catch(() => undefined);
+    if (error instanceof LabAgentError) throw new StudioError(502, error.code === "INVALID_RESPONSE" ? "LAB_AGENT_BAD_REPLY" : "LAB_AGENT_FAILED", "The lab agent could not answer.");
+    throw error;
+  }
+}
+
 export async function handleStudioRequest(
   request: Request,
   env: StudioEnv,
@@ -592,6 +625,8 @@ export async function handleStudioRequest(
       return await resolve(request, env);
     if (path === "/api/layout-agent" && request.method === "POST")
       return await layoutAgent(request, url, env);
+    if (path === "/api/lab-agent" && request.method === "POST")
+      return await labAgent(request, url, env);
     // The release switch is deliberately checked before body parsing, storage, network, or credentials.
     if (
       (path === "/api/generations" || path === "/api/studio/generation/jobs") &&

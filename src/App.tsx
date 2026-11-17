@@ -1093,6 +1093,7 @@ export default function App() {
               <span>{label}</span>
             </button>
           ))}
+          <a className="space-link" href="/lab" aria-label="Design Lab" title="Open Design Lab"><FlaskConical size={13} /><span>Design Lab</span></a>
         </div>
         <div className="header-actions" inert={presenting}>
           <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>
