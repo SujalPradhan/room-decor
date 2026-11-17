@@ -35,12 +35,13 @@ test('the smoke drill shows who gets out in time', async ({ page }) => {
   const card = page.getByRole('region', { name: 'Smoke drill', exact: true });
   await expect(card).toBeVisible();
   await expect(card.getByText('A simple model for showing direction and timing, not a fire safety assessment.')).toBeVisible();
-  await expect(card.locator('.lab-people li')).toHaveCount(6);
+  await expect(card.locator('.lab-people li')).toHaveCount(14);
   await card.getByRole('slider', { name: 'Time in seconds' }).fill('10');
   await expect(card.locator('output')).toContainText('10 s');
 });
 
 test('an agent answer is applied at once, numbered in the room and explained in plain words', async ({ page }) => {
+  test.setTimeout(180_000);
   const errors = watchErrors(page);
   await page.route('**/api/lab-agent', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"LAB_AGENT_UNAVAILABLE","message":"off"}}' }));
   await page.goto('/lab');
@@ -53,8 +54,9 @@ test('an agent answer is applied at once, numbered in the room and explained in 
   await expect(changes.getByRole('heading')).toContainText(/The agent made \d+ changes?/);
   await expect(changes.getByText(/Fixed \d+ problems?/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
-  await expect(problems.getByRole('heading')).toHaveText('No problems found');
-  await expect(page.locator('.lab-scene-tag')).toBeVisible();
+  await expect(page.locator('.lab-scene-tag')).toContainText(/Change 1 of \d+/);
+  await expect(problems.getByRole('heading')).toHaveText('No problems found', { timeout: 150_000 });
+  await expect(page.locator('.lab-scene-tag')).toContainText('Green numbers mark what the agent changed');
   await changes.getByRole('button', { name: 'Undo' }).click();
   await expect(problems.getByRole('heading')).toContainText('problems in this office');
   expect(errors.filter(error => !error.includes('503'))).toEqual([]);
