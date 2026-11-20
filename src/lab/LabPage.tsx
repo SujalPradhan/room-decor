@@ -1,4 +1,4 @@
-import { BedDouble, Box, Eye, FlaskConical, Footprints, Layers, Loader2, Map as MapIcon, Pause, Play, RotateCcw, Sparkles, Square, Store, Trash2, Undo2, Flame, CheckCircle2 } from 'lucide-react';
+import { BedDouble, Box, Eye, FlaskConical, Footprints, Layers, Loader2, Map as MapIcon, Pause, Play, RotateCcw, Sparkles, Square, Store, Trash2, Undo2, Flame, CheckCircle2, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { evaluate } from './checks';
 import { runLabAgent, type LabAgentRun, type LabStep } from './lab-agent';
@@ -221,6 +221,7 @@ export default function LabPage() {
         <a className="space-link" href="/" aria-label="Bedroom"><BedDouble size={13} /><span>Bedroom</span></a>
         <a className="space-link" href="/?space=retail" aria-label="Store"><Store size={13} /><span>Store</span></a>
         <a className="space-link active" href="/lab" aria-label="Design Lab" aria-current="page"><FlaskConical size={13} /><span>Design Lab</span></a>
+        <a className="space-link" href="/bracket" aria-label="Bracket Lab"><Wrench size={13} /><span>Bracket Lab</span></a>
       </div>
       <h1>Design Lab</h1>
       <div className="lab-top-actions">

@@ -21,6 +21,7 @@ import {
   EyeOff,
   Fan,
   FlaskConical,
+  Wrench,
   Footprints,
   Gem,
   Grid2X2,
@@ -1094,6 +1095,7 @@ export default function App() {
             </button>
           ))}
           <a className="space-link" href="/lab" aria-label="Design Lab" title="Open Design Lab"><FlaskConical size={13} /><span>Design Lab</span></a>
+          <a className="space-link" href="/bracket" aria-label="Bracket Lab" title="Open Bracket Lab"><Wrench size={13} /><span>Bracket Lab</span></a>
         </div>
         <div className="header-actions" inert={presenting}>
           <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>

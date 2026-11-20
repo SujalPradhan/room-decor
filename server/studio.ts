@@ -1,3 +1,4 @@
+import { askBracketModel, bracketProviders, BracketAgentError, readBracketAgentInput, type BracketAgentInput } from "./bracket-agent";
 import { askLabModel, labProviders, LabAgentError, readLabAgentInput, type LabAgentInput } from "./lab-agent";
 import { askLayoutModel, layoutProviders, readLayoutAgentInput, LayoutAgentError, type LayoutAgentInput } from "./layout-agent";
 import { handlePipelineRequest } from "./local-pipeline";
@@ -608,6 +609,38 @@ async function labAgent(request: Request, url: URL, env: StudioEnv) {
   }
 }
 
+/**
+ * Bracket Lab agent: the same switches, providers and site budget as the lab agent. The browser runs the checks.
+ */
+async function bracketAgent(request: Request, url: URL, env: StudioEnv) {
+  if (env.STUDIO_LAYOUT_AGENT_ENABLED !== "true" || (env.STUDIO_LAYOUT_AGENT_PUBLIC !== "true" && !["127.0.0.1", "localhost"].includes(url.hostname)))
+    throw new StudioError(503, "BRACKET_AGENT_UNAVAILABLE", "The bracket agent is not available here.");
+  let input: BracketAgentInput;
+  try { input = readBracketAgentInput(await readJson(request)); }
+  catch (error) {
+    if (error instanceof BracketAgentError) throw new StudioError(400, error.code === "INVALID_REQUEST" ? "INVALID_REQUEST" : "INVALID_SITUATION", error.message);
+    throw error;
+  }
+  let providers: ReturnType<typeof bracketProviders>;
+  try { providers = bracketProviders({ foundryToken: env.FOUNDRY_API_KEY, aipipeToken: env.AIPIPE_API_KEY, foundryModel: env.LAYOUT_AGENT_FOUNDRY_MODEL, aipipeModel: env.LAYOUT_AGENT_AIPIPE_MODEL }); }
+  catch { throw new StudioError(503, "BRACKET_AGENT_UNAVAILABLE", "The bracket agent is not available here."); }
+  let budget: { fetch(url: string): Promise<Response> } | undefined;
+  if (env.STUDIO_LAYOUT_AGENT_PUBLIC === "true") {
+    if (!env.LAYOUT_AGENT_BUDGET)
+      throw new StudioError(503, "BRACKET_AGENT_UNAVAILABLE", "The bracket agent is not available here.");
+    budget = env.LAYOUT_AGENT_BUDGET.get(env.LAYOUT_AGENT_BUDGET.idFromName("site") as never);
+    if (!(await budget.fetch("https://budget/spend")).ok)
+      throw new StudioError(429, "BRACKET_AGENT_BUSY", "The bracket agent is busy. Try again later.");
+  }
+  try {
+    return json(await askBracketModel(input, providers, request.signal));
+  } catch (error) {
+    if (error instanceof BracketAgentError && error.code === "PROVIDER_REFUSED") await budget?.fetch("https://budget/refund").catch(() => undefined);
+    if (error instanceof BracketAgentError) throw new StudioError(502, error.code === "INVALID_RESPONSE" ? "BRACKET_AGENT_BAD_REPLY" : "BRACKET_AGENT_FAILED", "The bracket agent could not answer.");
+    throw error;
+  }
+}
+
 export async function handleStudioRequest(
   request: Request,
   env: StudioEnv,
@@ -627,6 +660,8 @@ export async function handleStudioRequest(
       return await layoutAgent(request, url, env);
     if (path === "/api/lab-agent" && request.method === "POST")
       return await labAgent(request, url, env);
+    if (path === "/api/bracket-agent" && request.method === "POST")
+      return await bracketAgent(request, url, env);
     // The release switch is deliberately checked before body parsing, storage, network, or credentials.
     if (
       (path === "/api/generations" || path === "/api/studio/generation/jobs") &&
