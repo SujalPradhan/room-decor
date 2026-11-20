@@ -123,7 +123,7 @@ const spaces = [
   { id: "room", label: "Bedroom", Icon: BedDouble },
   { id: "retail", label: "Store", Icon: Store },
 ] as const;
-import { DoorClosed, Gift, MonitorPlay, ScanFace, Sparkles, SprayCan } from "lucide-react";
+import { Building2, DoorClosed, Gift, MonitorPlay, ScanFace, Sparkles, SprayCan } from "lucide-react";
 import { ChevronUp, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 const kindIcons: Record<ItemKind, LucideIcon> = {
   bed: BedDouble,
@@ -1096,6 +1096,7 @@ export default function App() {
           ))}
           <a className="space-link" href="/lab" aria-label="Design Lab" title="Open Design Lab"><FlaskConical size={13} /><span>Design Lab</span></a>
           <a className="space-link" href="/bracket" aria-label="Bracket Lab" title="Open Bracket Lab"><Wrench size={13} /><span>Bracket Lab</span></a>
+          <a className="space-link" href="/tower" aria-label="Tower Lab" title="Open Tower Lab"><Building2 size={13} /><span>Tower Lab</span></a>
         </div>
         <div className="header-actions" inert={presenting}>
           <button className="button outline small studio-cost-button" aria-label="Cost & time" onClick={() => { setCostOpen(true); setProductOpen(false); setExportOpen(false); }}><Clock3 size={15}/><span>Cost & time</span></button>

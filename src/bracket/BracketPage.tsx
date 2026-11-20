@@ -1,4 +1,4 @@
-import { BedDouble, Box, ChevronDown, FlaskConical, Loader2, RotateCcw, Sparkles, Square, Store, Undo2, Wrench } from 'lucide-react';
+import { BedDouble, Box, Building2, ChevronDown, FlaskConical, Loader2, RotateCcw, Sparkles, Square, Store, Undo2, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import BracketIterations from './BracketIterations';
 import BracketReport from './BracketReport';
@@ -177,6 +177,7 @@ export default function BracketPage() {
         <a className="space-link" href="/?space=retail" aria-label="Store"><Store size={13} /><span>Store</span></a>
         <a className="space-link" href="/lab" aria-label="Design Lab"><FlaskConical size={13} /><span>Design Lab</span></a>
         <a className="space-link active" href="/bracket" aria-label="Bracket Lab" aria-current="page"><Wrench size={13} /><span>Bracket Lab</span></a>
+        <a className="space-link" href="/tower" aria-label="Tower Lab"><Building2 size={13} /><span>Tower Lab</span></a>
       </div>
       <h1>Bracket Lab</h1>
       <div className="lab-top-actions">

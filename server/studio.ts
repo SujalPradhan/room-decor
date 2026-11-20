@@ -1,4 +1,5 @@
 import { askBracketModel, bracketProviders, BracketAgentError, readBracketAgentInput, type BracketAgentInput } from "./bracket-agent";
+import { askTowerModel, towerProviders, TowerAgentError, readTowerAgentInput, type TowerAgentInput } from "./tower-agent";
 import { askLabModel, labProviders, LabAgentError, readLabAgentInput, type LabAgentInput } from "./lab-agent";
 import { askLayoutModel, layoutProviders, readLayoutAgentInput, LayoutAgentError, type LayoutAgentInput } from "./layout-agent";
 import { handlePipelineRequest } from "./local-pipeline";
@@ -641,6 +642,38 @@ async function bracketAgent(request: Request, url: URL, env: StudioEnv) {
   }
 }
 
+/**
+ * Tower Lab agent: the same switches, providers and site budget as the lab agent. The browser runs the checks.
+ */
+async function towerAgent(request: Request, url: URL, env: StudioEnv) {
+  if (env.STUDIO_LAYOUT_AGENT_ENABLED !== "true" || (env.STUDIO_LAYOUT_AGENT_PUBLIC !== "true" && !["127.0.0.1", "localhost"].includes(url.hostname)))
+    throw new StudioError(503, "TOWER_AGENT_UNAVAILABLE", "The tower agent is not available here.");
+  let input: TowerAgentInput;
+  try { input = readTowerAgentInput(await readJson(request)); }
+  catch (error) {
+    if (error instanceof TowerAgentError) throw new StudioError(400, error.code === "INVALID_REQUEST" ? "INVALID_REQUEST" : "INVALID_SITUATION", error.message);
+    throw error;
+  }
+  let providers: ReturnType<typeof towerProviders>;
+  try { providers = towerProviders({ foundryToken: env.FOUNDRY_API_KEY, aipipeToken: env.AIPIPE_API_KEY, foundryModel: env.LAYOUT_AGENT_FOUNDRY_MODEL, aipipeModel: env.LAYOUT_AGENT_AIPIPE_MODEL }); }
+  catch { throw new StudioError(503, "TOWER_AGENT_UNAVAILABLE", "The tower agent is not available here."); }
+  let budget: { fetch(url: string): Promise<Response> } | undefined;
+  if (env.STUDIO_LAYOUT_AGENT_PUBLIC === "true") {
+    if (!env.LAYOUT_AGENT_BUDGET)
+      throw new StudioError(503, "TOWER_AGENT_UNAVAILABLE", "The tower agent is not available here.");
+    budget = env.LAYOUT_AGENT_BUDGET.get(env.LAYOUT_AGENT_BUDGET.idFromName("site") as never);
+    if (!(await budget.fetch("https://budget/spend")).ok)
+      throw new StudioError(429, "TOWER_AGENT_BUSY", "The tower agent is busy. Try again later.");
+  }
+  try {
+    return json(await askTowerModel(input, providers, request.signal));
+  } catch (error) {
+    if (error instanceof TowerAgentError && error.code === "PROVIDER_REFUSED") await budget?.fetch("https://budget/refund").catch(() => undefined);
+    if (error instanceof TowerAgentError) throw new StudioError(502, error.code === "INVALID_RESPONSE" ? "TOWER_AGENT_BAD_REPLY" : "TOWER_AGENT_FAILED", "The tower agent could not answer.");
+    throw error;
+  }
+}
+
 export async function handleStudioRequest(
   request: Request,
   env: StudioEnv,
@@ -662,6 +695,8 @@ export async function handleStudioRequest(
       return await labAgent(request, url, env);
     if (path === "/api/bracket-agent" && request.method === "POST")
       return await bracketAgent(request, url, env);
+    if (path === "/api/tower-agent" && request.method === "POST")
+      return await towerAgent(request, url, env);
     // The release switch is deliberately checked before body parsing, storage, network, or credentials.
     if (
       (path === "/api/generations" || path === "/api/studio/generation/jobs") &&
