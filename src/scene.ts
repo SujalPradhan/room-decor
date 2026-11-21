@@ -8,10 +8,11 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { createSurfaceLibrary, type SurfaceKind } from "./realism-surfaces";
 import { getLocalModel } from "./local-assets";
 import { getCatalogAsset } from "./catalog";
-import { canStand } from "./domain";
+import { RETAIL_KINDS, ROOM_KINDS, canStand, getFootprint } from "./domain";
 import type {
   FurnitureItem,
   ItemKind,
@@ -108,6 +109,212 @@ function rod(
   o.quaternion.setFromUnitVectors(UP, b.clone().sub(a).normalize());
   return o;
 }
+
+/** Space decides the renderer, never floor area: a small store is still a store and a big bedroom still a bedroom. */
+const isStore = (state: SceneState) => state.space === "retail";
+/** Pixels the floating stage UI covers in the default store view. Matches .layout-prompt in layout-explainer.css plus a margin. */
+const storeInsets = (hostWidth: number) =>
+  hostWidth < 700
+    ? { top: 96, bottom: 204, side: 14 }
+    : { top: 100, bottom: 164, side: 28 };
+const glow = () => new THREE.MeshBasicMaterial({ color: "#fff0d8" });
+const mirror = () => material("#e8efee", 0.14, 0.55);
+const brass = () => material("#b79560", 0.32, 0.75);
+function lit(o: THREE.Mesh) {
+  o.castShadow = false;
+  return o;
+}
+function tinted(color: string, lightness: number) {
+  return material(new THREE.Color(color).offsetHSL(0, 0, lightness).getHex());
+}
+const PRODUCT_TONES = [
+  "#e6c4b8",
+  "#c5837a",
+  "#f3ece2",
+  "#94595f",
+  "#d8b28c",
+  "#6c4852",
+];
+const painted = (geometry: THREE.BufferGeometry, color: string) => {
+  const c = new THREE.Color(color),
+    count = geometry.attributes.position.count,
+    colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) colors.set([c.r, c.g, c.b], i * 3);
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+};
+/** One merged mesh per fixture keeps a stocked store to a few draw calls. Slots are product bases. */
+function products(
+  group: THREE.Object3D,
+  slots: number[][],
+  height: number,
+  seed = 0,
+) {
+  const parts: THREE.BufferGeometry[] = [];
+  const add = (
+    geometry: THREE.BufferGeometry,
+    color: string,
+    x: number,
+    y: number,
+    z: number,
+  ) => parts.push(painted(geometry, color).translate(x, y, z));
+  slots.forEach(([x, y, z], i) => {
+    const shape = (i + seed) % 4,
+      tone = PRODUCT_TONES[(i * 5 + seed) % PRODUCT_TONES.length],
+      r = height * 0.2;
+    if (shape === 0) {
+      add(new THREE.CylinderGeometry(r, r, height * 0.72, 10), tone, x, y + height * 0.36, z);
+      add(new THREE.CylinderGeometry(r * 0.55, r * 0.55, height * 0.28, 10), "#b79560", x, y + height * 0.86, z);
+    } else if (shape === 1) {
+      add(new THREE.CylinderGeometry(r * 1.5, r * 1.5, height * 0.34, 12), tone, x, y + height * 0.17, z);
+      add(new THREE.CylinderGeometry(r * 1.55, r * 1.55, height * 0.14, 12), "#f3ece2", x, y + height * 0.41, z);
+    } else if (shape === 2) {
+      add(new THREE.BoxGeometry(r * 2.1, height * 0.82, r * 1.3), tone, x, y + height * 0.41, z);
+    } else {
+      add(new THREE.CylinderGeometry(r * 0.62, r * 0.62, height * 0.56, 8), "#3c3431", x, y + height * 0.28, z);
+      add(new THREE.CylinderGeometry(r * 0.46, r * 0.5, height * 0.34, 8), tone, x, y + height * 0.73, z);
+    }
+  });
+  const merged = mergeGeometries(parts);
+  parts.forEach((part) => part.dispose());
+  const mat = material("#ffffff", 0.34, 0.04);
+  mat.vertexColors = true;
+  return mesh(group, merged, mat);
+}
+const productRow = (
+  span: number,
+  y: number,
+  z: number,
+  count: number,
+  offset = 0,
+) =>
+  Array.from({ length: count }, (_, i) => [
+    offset + span * ((i + 0.5) / count - 0.5),
+    y,
+    z,
+  ]);
+/** Vertical fluting along a front face, merged so a long counter stays one draw call. */
+function fluted(
+  group: THREE.Object3D,
+  width: number,
+  height: number,
+  y: number,
+  z: number,
+  mat: THREE.Material,
+) {
+  const count = Math.max(4, Math.round(width / 0.075)),
+    pitch = width / count;
+  const parts = Array.from({ length: count }, (_, i) =>
+    new THREE.CylinderGeometry(pitch * 0.46, pitch * 0.46, height, 8).translate(
+      -width / 2 + pitch * (i + 0.5),
+      y,
+      z,
+    ),
+  );
+  const merged = mergeGeometries(parts);
+  parts.forEach((part) => part.dispose());
+  return mesh(group, merged, mat);
+}
+function roundMirror(
+  group: THREE.Object3D,
+  radius: number,
+  x: number,
+  y: number,
+  z: number,
+) {
+  const face = cylinder(group, radius, radius, 0.012, mirror(), x, y, z, 40);
+  face.rotation.x = Math.PI / 2;
+  lit(mesh(group, new THREE.TorusGeometry(radius + 0.008, 0.011, 8, 40), glow(), x, y, z));
+}
+
+/** One clock drives every digital wall, so animating them costs one uniform write and no rebuilds. */
+const screenClock = { value: 8 };
+/** A soft, slowly drifting gradient in three hues taken from the screen colour. No textures, one draw call. */
+function screenMaterial(color: string) {
+  const hsl = { h: 0, s: 0, l: 0 };
+  new THREE.Color(color).getHSL(hsl, THREE.SRGBColorSpace);
+  const tone = (shift: number, s: number, l: number) =>
+    new THREE.Color().setHSL((hsl.h + shift + 1) % 1, Math.min(1, s), l, THREE.SRGBColorSpace);
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: screenClock,
+      uA: { value: tone(0, hsl.s * 0.9 + 0.12, 0.66) },
+      uB: { value: tone(0.07, hsl.s + 0.2, 0.36) },
+      uC: { value: tone(-0.06, 0.4, 0.86) },
+    },
+    vertexShader:
+      "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: `uniform float uTime; uniform vec3 uA; uniform vec3 uB; uniform vec3 uC; varying vec2 vUv;
+      void main(){
+        float t = uTime * 0.12;
+        vec2 p = vUv;
+        float wave = 0.5 + 0.5 * sin(p.x * 2.6 + t * 1.7 + sin(p.y * 2.1 - t));
+        float drift = 0.5 + 0.5 * sin(p.y * 3.2 - t * 1.3 + p.x * 1.4);
+        vec3 col = mix(uB, uA, wave);
+        col = mix(col, uC, drift * drift * 0.5);
+        vec2 c = vec2(0.5 + 0.22 * sin(t * 0.9), 0.52 + 0.12 * cos(t * 0.7));
+        vec2 q = (p - c) * vec2(2.2, 1.3);
+        col += vec3(0.32) * exp(-6.0 * dot(q, q));
+        col *= 0.82 + 0.18 * smoothstep(0.0, 0.35, p.y);
+        gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+}
+/** Store fixtures are many small parts. Parts that look the same merge, so a fixture costs a handful of draw calls. */
+function mergeFixture(group: THREE.Group): THREE.Group {
+  group.updateMatrixWorld(true);
+  const inverse = group.matrixWorld.clone().invert(),
+    batches = new Map<string, { material: THREE.Material; cast: boolean; parts: THREE.BufferGeometry[]; meshes: THREE.Mesh[] }>(),
+    merged: THREE.Mesh[] = [];
+  const keyOf = (m: THREE.Material) => {
+    const c = (m as THREE.MeshStandardMaterial).color?.getHexString() ?? "";
+    const s = m as THREE.MeshPhysicalMaterial;
+    return [m.type, c, s.roughness, s.metalness, m.transparent, m.opacity, m.vertexColors, m.side, m.depthWrite].join("|");
+  };
+  group.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || Array.isArray(o.material) || o.material instanceof THREE.ShaderMaterial) return;
+    const geometry = o.geometry as THREE.BufferGeometry;
+    if (!geometry.attributes.normal || !geometry.attributes.uv) return;
+    const key = `${keyOf(o.material)}|${o.castShadow}`,
+      part = (geometry.index ? geometry.toNonIndexed() : geometry.clone()).applyMatrix4(inverse.clone().multiply(o.matrixWorld));
+    for (const name of Object.keys(part.attributes)) if (!["position", "normal", "uv", "color"].includes(name)) part.deleteAttribute(name);
+    if (!o.material.vertexColors) part.deleteAttribute("color");
+    const batch = batches.get(key) ?? { material: o.material, cast: o.castShadow, parts: [] as THREE.BufferGeometry[], meshes: [] as THREE.Mesh[] };
+    batch.parts.push(part);
+    batch.meshes.push(o);
+    batches.set(key, batch);
+  });
+  const used = new Set<THREE.Material>();
+  for (const { material, cast, parts, meshes } of batches.values()) {
+    const geometry = parts.length > 1 ? mergeGeometries(parts) : null;
+    parts.forEach((part) => part.dispose());
+    if (!geometry) continue;
+    const o = mesh(group, geometry, material);
+    o.castShadow = cast;
+    used.add(material);
+    merged.push(...meshes);
+  }
+  for (const o of merged) {
+    o.removeFromParent();
+    o.geometry.dispose();
+    if (!used.has(o.material as THREE.Material)) (o.material as THREE.Material).dispose();
+  }
+  return group;
+}
+/** Floor inlays mark these zones of a store. */
+const ZONES: { kinds: ItemKind[]; color: string }[] = [
+  { kinds: ["fragrance-tower"], color: "#d6b986" },
+  { kinds: ["skin-analyzer", "consultation-station"], color: "#aec7b4" },
+  { kinds: ["mirror-station", "beauty-chair"], color: "#dcaea4" },
+  { kinds: ["lounge-bench"], color: "#bd9f8a" },
+  { kinds: ["gift-station", "checkout-counter"], color: "#d5bf98" },
+  // Plinths gathered before a screen make a stage.
+  { kinds: ["hero-plinth", "digital-wall"], color: "#b7a39a" },
+];
+const ZONE_OF = Object.fromEntries(ZONES.flatMap((zone) => zone.kinds.map((kind) => [kind, true]))) as Partial<Record<ItemKind, boolean>>;
+const RETAIL_FIXTURES = new Set(RETAIL_KINDS.filter((kind) => !ROOM_KINDS.includes(kind)));
 
 function buildFurniture(item: FurnitureItem): THREE.Group {
   const g = new THREE.Group(),
@@ -461,6 +668,342 @@ function buildFurniture(item: FurnitureItem): THREE.Group {
           material(["#c1ab85", "#65716b", "#9d7865", "#d6d1bb"][i]),
           [-w * 0.34 + i * 0.075, 0.07 + (row * (h - 0.08)) / 4 + 0.12, 0],
         );
+  } else if (item.kind === "display-table") {
+    const top = h - 0.17,
+      stone = material("#efe8de", 0.32);
+    box(g, [w * 0.7, 0.05, d * 0.66], dark, [0, 0.025, 0]);
+    box(g, [w * 0.64, top - 0.11, d * 0.6], body, [0, 0.05 + (top - 0.11) / 2, 0], 0.02);
+    fluted(g, w * 0.64, top - 0.13, 0.05 + (top - 0.11) / 2, d * 0.3, body);
+    fluted(g, w * 0.64, top - 0.13, 0.05 + (top - 0.11) / 2, -d * 0.3, body);
+    box(g, [w, 0.06, d], stone, [0, top - 0.03, 0], 0.016);
+    box(g, [w * 0.98, 0.012, d * 0.98], brass(), [0, top - 0.066, 0]);
+    box(g, [w * 0.34, 0.05, d * 0.42], body, [-w * 0.24, top + 0.025, 0], 0.012);
+    box(g, [w * 0.2, 0.09, d * 0.3], cream, [w * 0.26, top + 0.045, -d * 0.12], 0.012);
+    products(
+      g,
+      [
+        ...productRow(w * 0.3, top + 0.05, -d * 0.1, 4, -w * 0.24),
+        ...productRow(w * 0.3, top + 0.05, d * 0.1, 4, -w * 0.24),
+      ],
+      0.12,
+    );
+    products(
+      g,
+      [
+        ...productRow(w * 0.17, top + 0.09, -d * 0.12, 3, w * 0.26),
+        ...productRow(w * 0.42, top, d * 0.3, 7, w * 0.16),
+      ],
+      0.08,
+      2,
+    );
+  } else if (item.kind === "wall-display") {
+    const header = 0.2,
+      plinth = 0.56,
+      bays = 3,
+      shelfMat = material("#f4eee5", 0.42),
+      shelves = (h - header - plinth) / bays;
+    box(g, [w, h, 0.05], tinted(item.color, -0.05), [0, h / 2, -d / 2 + 0.025]);
+    for (const x of [-w / 2 + 0.02, 0, w / 2 - 0.02])
+      box(g, [0.04, h - header, d * 0.86], body, [x, (h - header) / 2, -d * 0.07]);
+    box(g, [w, plinth, d], body, [0, plinth / 2, 0], 0.012);
+    for (const x of [-w * 0.25, w * 0.25]) {
+      box(g, [w * 0.47, plinth - 0.14, 0.018], tinted(item.color, 0.03), [x, plinth / 2 + 0.02, d / 2 + 0.001]);
+      box(g, [0.14, 0.012, 0.02], brass(), [x, plinth - 0.1, d / 2 + 0.012]);
+    }
+    box(g, [w, header, d * 0.92], dark, [0, h - header / 2, -d * 0.04], 0.012);
+    lit(box(g, [w * 0.92, 0.018, 0.02], glow(), [0, h - header - 0.012, d * 0.24]));
+    for (let i = 0; i < bays; i++) {
+      const y = plinth + i * shelves;
+      if (i) box(g, [w - 0.04, 0.03, d * 0.82], shelfMat, [0, y, -d * 0.07]);
+      lit(box(g, [w * 0.92, 0.008, 0.012], glow(), [0, y + shelves - 0.05, d * 0.17]));
+      for (const side of [-1, 1])
+        products(
+          g,
+          [
+            ...productRow(w * 0.42, y + 0.016, -d * 0.2, 6, (side * w) / 4),
+            ...productRow(w * 0.42, y + 0.016, d * 0.08, 5, (side * w) / 4),
+          ],
+          0.26 - i * 0.02,
+          i * 3 + side + 1,
+        );
+    }
+  } else if (item.kind === "testing-bar") {
+    const top = 0.92,
+      stone = material("#f1ebe2", 0.24),
+      kick = 0.09;
+    box(g, [w * 0.97, kick, d * 0.86], dark, [0, kick / 2, 0]);
+    box(g, [w * 0.97, top - kick - 0.05, d * 0.9], body, [0, (top - 0.05 + kick) / 2, 0], 0.02);
+    fluted(g, w * 0.97, top - kick - 0.05, (top - 0.05 + kick) / 2, d * 0.45, body);
+    box(g, [w, 0.05, d], stone, [0, top - 0.025, 0], 0.016);
+    box(g, [w * 0.86, h - top, 0.04], tinted(item.color, -0.06), [0, (h + top) / 2, -d * 0.36], 0.012);
+    for (const x of [-w * 0.3, 0, w * 0.3]) {
+      roundMirror(g, Math.min(0.17, (h - top) * 0.42), x, top + (h - top) * 0.52, -d * 0.325);
+      box(g, [w * 0.2, 0.02, d * 0.34], material("#d8c9b8", 0.5), [x, top + 0.01, d * 0.14], 0.008);
+      products(
+        g,
+        [
+          ...productRow(w * 0.17, top + 0.02, d * 0.06, 5, x),
+          ...productRow(w * 0.17, top + 0.02, d * 0.22, 5, x),
+        ],
+        0.09,
+        Math.round(x * 4) + 2,
+      );
+    }
+    lit(box(g, [w * 0.86, 0.012, 0.02], glow(), [0, top + 0.012, -d * 0.31]));
+  } else if (item.kind === "consultation-station") {
+    const top = 0.76,
+      stone = material("#f1ebe2", 0.26),
+      pedestal = w * 0.24;
+    for (const side of [-1, 1]) {
+      const x = side * (w / 2 - pedestal / 2);
+      box(g, [pedestal, top - 0.04, d * 0.9], body, [x, (top - 0.04) / 2, 0], 0.014);
+      for (const y of [0.2, 0.46])
+        box(g, [0.12, 0.012, 0.018], brass(), [x, y, d * 0.46]);
+    }
+    box(g, [w, 0.04, d], stone, [0, top - 0.02, 0], 0.014);
+    box(g, [w, h - top, 0.05], tinted(item.color, -0.05), [0, (h + top) / 2, -d / 2 + 0.03], 0.014);
+    const glass = box(g, [w * 0.44, (h - top) * 0.62, 0.012], mirror(), [0, top + (h - top) * 0.33, -d / 2 + 0.062]);
+    glass.castShadow = false;
+    const crown = cylinder(g, w * 0.22, w * 0.22, 0.012, mirror(), 0, top + (h - top) * 0.64, -d / 2 + 0.062, 40);
+    crown.rotation.x = Math.PI / 2;
+    for (const x of [-w * 0.3, w * 0.3])
+      lit(box(g, [0.026, (h - top) * 0.72, 0.018], glow(), [x, top + (h - top) * 0.46, -d / 2 + 0.064]));
+    const tablet = box(g, [0.24, 0.17, 0.012], dark, [w * 0.33, top + 0.1, -d * 0.1], 0.005);
+    tablet.rotation.x = -0.32;
+    box(g, [w * 0.2, 0.02, d * 0.3], material("#d8c9b8", 0.5), [-w * 0.3, top + 0.01, d * 0.02], 0.008);
+    products(g, productRow(w * 0.18, top + 0.02, d * 0.02, 5, -w * 0.3), 0.1, 1);
+  } else if (item.kind === "hero-plinth") {
+    const m = Math.min(w, d),
+      round = new THREE.Group(),
+      stone = material("#efe8de", 0.3),
+      stage = h * 0.56;
+    round.scale.set(w / m, 1, d / m);
+    g.add(round);
+    cylinder(round, m * 0.5, m * 0.5, 0.1, dark, 0, 0.05, 0, 48);
+    lit(cylinder(round, m * 0.47, m * 0.47, 0.012, glow(), 0, 0.106, 0, 48));
+    cylinder(round, m * 0.44, m * 0.44, 0.14, stone, 0, 0.18, 0, 48);
+    cylinder(round, m * 0.36, m * 0.36, stage - 0.25, body, 0, (stage + 0.25) / 2, 0, 48);
+    mesh(round, new THREE.TorusGeometry(m * 0.36, 0.012, 8, 48), brass(), 0, stage, 0).rotation.x = Math.PI / 2;
+    const dome = new THREE.MeshPhysicalMaterial({
+      color: "#f4f6f2",
+      roughness: 0.06,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    lit(cylinder(round, m * 0.3, m * 0.3, h - stage - 0.03, dome, 0, (h + stage - 0.03) / 2, 0, 40));
+    cylinder(round, m * 0.31, m * 0.31, 0.03, brass(), 0, h - 0.015, 0, 40);
+    cylinder(round, m * 0.31, m * 0.31, 0.02, stone, 0, stage + 0.01, 0, 40);
+    const heroH = (h - stage) * 0.72;
+    box(round, [m * 0.26, heroH * 0.68, m * 0.16], tinted(item.color, 0.12), [0, stage + 0.02 + heroH * 0.34, 0], 0.03);
+    cylinder(round, m * 0.065, m * 0.08, heroH * 0.3, brass(), 0, stage + 0.02 + heroH * 0.83, 0, 20);
+  } else if (item.kind === "checkout-counter") {
+    const worktop = h - 0.2,
+      stone = material("#efe8de", 0.26),
+      kick = 0.09,
+      bodyH = worktop - kick - 0.04,
+      bodyY = kick + bodyH / 2;
+    box(g, [w * 0.97, kick, d * 0.88], material("#2a2726"), [0, kick / 2, 0]);
+    box(g, [w * 0.97, bodyH, d * 0.92], body, [0, bodyY, 0], 0.02);
+    fluted(g, w * 0.97, bodyH, bodyY, d * 0.46, body);
+    box(g, [w, 0.04, d], stone, [0, worktop - 0.02, 0], 0.014);
+    box(g, [w * 0.98, 0.012, d * 0.98], brass(), [0, worktop - 0.046, 0]);
+    box(g, [w, h - worktop - 0.04, 0.08], body, [0, (h + worktop - 0.04) / 2, d * 0.38], 0.012);
+    box(g, [w, 0.03, 0.2], stone, [0, h - 0.035, d * 0.4], 0.012);
+    lit(box(g, [w * 0.92, 0.012, 0.012], glow(), [0, worktop + 0.01, d * 0.32]));
+    for (const x of [-w * 0.2, w * 0.2]) {
+      cylinder(g, 0.016, 0.03, 0.06, metal, x, worktop + 0.03, -d * 0.1, 12);
+      const screen = box(g, [0.27, 0.15, 0.014], dark, [x, worktop + 0.115, -d * 0.1], 0.005);
+      screen.rotation.x = 0.28;
+      const display = box(g, [0.24, 0.125, 0.004], material("#c9d6d3", 0.3), [x, worktop + 0.115, -d * 0.1 - 0.009]);
+      display.rotation.x = 0.28;
+    }
+    box(g, [0.075, 0.02, 0.13], dark, [w * 0.02, h - 0.01, d * 0.4], 0.008);
+    box(g, [0.34, 0.09, 0.24], material("#e8dccb", 0.7), [-w * 0.4, worktop + 0.045, -d * 0.12], 0.008);
+    box(g, [0.3, 0.05, 0.2], material("#c7a9a0", 0.7), [-w * 0.4, worktop + 0.115, -d * 0.12], 0.008);
+  } else if (item.kind === "lounge-bench") {
+    const seatY = h * 0.56,
+      base = material(palette.oak, 0.5);
+    box(g, [w * 0.94, 0.09, d * 0.82], dark, [0, 0.045, 0]);
+    box(g, [w, seatY - 0.2, d], base, [0, 0.09 + (seatY - 0.2) / 2, 0], 0.02);
+    box(g, [w * 0.98, 0.14, d * 0.96], body, [0, seatY - 0.04, 0], 0.05);
+    const back = box(g, [w * 0.98, h - seatY + 0.02, 0.16], body, [0, (h + seatY - 0.02) / 2, -d / 2 + 0.085], 0.06);
+    back.rotation.x = -0.05;
+    for (const x of [-w * 0.25, 0, w * 0.25])
+      box(g, [0.012, 0.006, d * 0.72], tinted(item.color, -0.08), [x, seatY + 0.03, d * 0.09]);
+    for (const side of [-1, 1]) {
+      const bolster = cylinder(g, 0.1, 0.1, d * 0.74, material("#ead9c8"), side * (w / 2 - 0.13), seatY + 0.13, d * 0.05, 20);
+      bolster.rotation.x = Math.PI / 2;
+    }
+  } else if (item.kind === "fragrance-tower") {
+    const m = Math.min(w, d),
+      round = new THREE.Group(),
+      stone = material("#efe8de", 0.28),
+      gold = brass(),
+      tiers = [0.24, 0.43, 0.62, 0.8].map((t) => h * t),
+      slots: number[][] = [];
+    round.scale.set(w / m, 1, d / m);
+    g.add(round);
+    cylinder(round, m * 0.5, m * 0.5, 0.08, dark, 0, 0.04, 0, 40);
+    lit(cylinder(round, m * 0.47, m * 0.47, 0.01, glow(), 0, 0.085, 0, 40));
+    cylinder(round, m * 0.44, m * 0.46, 0.22, stone, 0, 0.2, 0, 40);
+    cylinder(round, m * 0.11, m * 0.13, h - 0.42, body, 0, 0.31 + (h - 0.42) / 2, 0, 24);
+    for (const y of tiers) {
+      cylinder(round, m * 0.42, m * 0.42, 0.03, stone, 0, y, 0, 40);
+      mesh(round, new THREE.TorusGeometry(m * 0.42, 0.01, 6, 40), gold, 0, y, 0).rotation.x = Math.PI / 2;
+      lit(mesh(round, new THREE.TorusGeometry(m * 0.3, 0.005, 4, 40), glow(), 0, y + 0.018, 0)).rotation.x = Math.PI / 2;
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2 + y;
+        slots.push([Math.sin(a) * m * 0.33, y + 0.015, Math.cos(a) * m * 0.33]);
+      }
+    }
+    products(round, slots, 0.13, 3);
+    const crown = h - 0.14;
+    cylinder(round, m * 0.38, m * 0.3, 0.12, body, 0, crown + 0.06, 0, 40);
+    mesh(round, new THREE.TorusGeometry(m * 0.38, 0.012, 6, 40), gold, 0, crown + 0.12, 0).rotation.x = Math.PI / 2;
+    lit(cylinder(round, m * 0.3, m * 0.3, 0.012, glow(), 0, crown - 0.006, 0, 40));
+    sphere(round, m * 0.06, gold, 0, h - 0.01, 0).scale.y = 0.6;
+  } else if (item.kind === "skin-analyzer") {
+    const stone = material("#f1ebe2", 0.24),
+      top = 1.02,
+      screenH = h - top - 0.14,
+      face = -d * 0.22,
+      glass = material("#151c22", 0.12, 0.2);
+    box(g, [w * 0.92, 0.05, d * 0.92], dark, [0, 0.025, 0], 0.012);
+    box(g, [w * 0.5, top - 0.09, d * 0.48], body, [0, 0.05 + (top - 0.09) / 2, d * 0.04], 0.03);
+    box(g, [w, 0.05, d * 0.78], stone, [0, top - 0.02, d * 0.08], 0.018);
+    box(g, [w * 0.9, screenH + 0.08, 0.07], tinted(item.color, -0.05), [0, top + screenH / 2 + 0.03, face], 0.025);
+    box(g, [w * 0.74, screenH * 0.86, 0.012], glass, [0, top + screenH / 2 + 0.03, face + 0.04]).castShadow = false;
+    const scan = new THREE.MeshBasicMaterial({ color: "#bfe3dc" });
+    const ring = lit(mesh(g, new THREE.TorusGeometry(w * 0.17, 0.006, 6, 40), scan, 0, top + screenH * 0.6, face + 0.048));
+    ring.scale.y = 1.25;
+    for (const [y, span] of [[0.24, 0.5], [0.18, 0.36], [0.12, 0.42]])
+      lit(box(g, [w * span, 0.008, 0.004], scan, [0, top + screenH * y, face + 0.048]));
+    lit(box(g, [w * 0.56, 0.006, 0.004], glow(), [0, top + screenH * 0.6, face + 0.05]));
+    mesh(g, new THREE.TorusGeometry(w * 0.3, 0.012, 8, 40, Math.PI), brass(), 0, top + screenH - 0.02, face + 0.02);
+    box(g, [0.16, 0.012, 0.1], material("#d8c9b8", 0.5), [-w * 0.26, top + 0.012, d * 0.22], 0.004);
+    products(g, productRow(w * 0.3, top + 0.005, d * 0.26, 3, w * 0.2), 0.09, 4);
+  } else if (item.kind === "beauty-chair") {
+    const chrome = material("#cfd2d0", 0.2, 0.85),
+      seatY = Math.min(0.62, h * 0.52),
+      back = -d / 2 + 0.07;
+    cylinder(g, w * 0.4, w * 0.44, 0.035, chrome, 0, 0.018, 0, 32);
+    cylinder(g, 0.045, 0.05, seatY - 0.12, chrome, 0, (seatY - 0.12) / 2 + 0.03, 0, 16);
+    box(g, [w * 0.88, 0.12, d * 0.72], body, [0, seatY, d * 0.04], 0.05);
+    const rest = box(g, [w * 0.86, h - seatY - 0.2, 0.12], body, [0, (h + seatY - 0.2) / 2 + 0.02, back], 0.05);
+    rest.rotation.x = -0.12;
+    box(g, [w * 0.5, 0.15, 0.1], body, [0, h - 0.08, back - 0.05], 0.045);
+    for (const side of [-1, 1]) {
+      box(g, [0.07, 0.05, d * 0.56], tinted(item.color, -0.06), [side * (w / 2 - 0.04), seatY + 0.2, -d * 0.02], 0.022);
+      box(g, [0.025, 0.2, 0.025], chrome, [side * (w / 2 - 0.04), seatY + 0.09, d * 0.16]);
+    }
+    rod(g, new THREE.Vector3(-w * 0.3, 0.24, d * 0.44), new THREE.Vector3(w * 0.3, 0.24, d * 0.44), 0.014, chrome);
+    rod(g, new THREE.Vector3(0, seatY - 0.08, d * 0.12), new THREE.Vector3(0, 0.24, d * 0.44), 0.012, chrome);
+  } else if (item.kind === "service-cabin") {
+    const wall = 0.08,
+      wallMat = body,
+      inner = tinted(item.color, 0.04),
+      door = Math.min(0.95, w * 0.36),
+      doorX = w / 2 - wall - door / 2 - 0.18,
+      frosted = new THREE.MeshPhysicalMaterial({ color: "#f3f1ec", roughness: 0.55, transparent: true, opacity: 0.55, depthWrite: false }),
+      band = Math.min(0.62, h * 0.24),
+      solid = h - band - 0.12;
+    box(g, [w, h, wall], wallMat, [0, h / 2, -d / 2 + wall / 2]);
+    for (const side of [-1, 1]) box(g, [wall, h, d - wall], wallMat, [side * (w / 2 - wall / 2), h / 2, wall / 2]);
+    const left = -w / 2 + wall,
+      doorL = doorX - door / 2,
+      doorR = doorX + door / 2,
+      right = w / 2 - wall;
+    for (const [a, b] of [[left, doorL], [doorR, right]]) {
+      box(g, [b - a, solid, wall], wallMat, [(a + b) / 2, solid / 2, d / 2 - wall / 2]);
+      lit(box(g, [b - a, band, 0.02], frosted, [(a + b) / 2, solid + band / 2, d / 2 - wall / 2]));
+    }
+    box(g, [door, h - 2.15, wall], wallMat, [doorX, (h + 2.15) / 2, d / 2 - wall / 2]);
+    // The door stands half open, so the door side reads at a glance.
+    const leaf = new THREE.Group();
+    leaf.position.set(doorR, 0, d / 2 - wall);
+    leaf.rotation.y = -1.05;
+    g.add(leaf);
+    box(leaf, [door - 0.02, 2.1, 0.04], tinted(item.color, -0.08), [-door / 2, 1.06, -0.02], 0.01);
+    box(leaf, [0.02, 0.32, 0.03], brass(), [-door + 0.1, 1.05, 0.02]);
+    box(g, [w + 0.02, 0.14, wall + 0.04], dark, [0, h - 0.07, d / 2 - wall / 2], 0.01);
+    lit(box(g, [w * 0.92, 0.014, 0.02], glow(), [0, h - 0.15, d / 2 + 0.01]));
+    lit(box(g, [0.34, 0.06, 0.012], material("#e7d5b5", 0.4, 0.6), [doorX, 2.32, d / 2 + 0.008]));
+    box(g, [w - wall * 2, 0.012, d - wall * 2], inner, [0, 0.008, 0]).castShadow = false;
+    const bedL = Math.min(1.9, w - 0.5);
+    box(g, [bedL, 0.5, 0.66], dark, [-w / 2 + wall + bedL / 2 + 0.12, 0.25, -d / 2 + 0.55], 0.03);
+    box(g, [bedL, 0.12, 0.7], material("#f4eee6", 0.85), [-w / 2 + wall + bedL / 2 + 0.12, 0.56, -d / 2 + 0.55], 0.05);
+    box(g, [0.36, 0.1, 0.5], material("#ffffff", 0.9), [-w / 2 + wall + 0.36, 0.67, -d / 2 + 0.55], 0.04);
+    box(g, [0.5, 0.82, 0.42], inner, [w / 2 - wall - 0.32, 0.41, -d / 2 + 0.3], 0.02);
+    products(g, productRow(0.4, 0.82, -d / 2 + 0.3, 4, w / 2 - wall - 0.32), 0.12, 2);
+    const lamp = cylinder(g, 0.16, 0.16, 0.02, glow(), -w * 0.1, h - 0.3, -d * 0.1, 24);
+    lit(lamp);
+  } else if (item.kind === "digital-wall") {
+    const base = 0.32,
+      bezel = 0.05,
+      screenW = w - bezel * 2,
+      screenH = h - base - bezel * 2;
+    box(g, [w, base, d], dark, [0, base / 2, 0], 0.02);
+    lit(box(g, [w * 0.96, 0.012, 0.02], glow(), [0, base - 0.02, d / 2 + 0.002]));
+    box(g, [w, h - base, d * 0.6], material("#16151a", 0.4, 0.2), [0, base + (h - base) / 2, -d * 0.2], 0.02);
+    const screen = mesh(g, new THREE.PlaneGeometry(screenW, screenH), screenMaterial(item.color), 0, base + bezel + screenH / 2, d * 0.1 + 0.002);
+    screen.castShadow = false;
+    screen.name = "digital-screen";
+  } else if (item.kind === "gift-station") {
+    const top = Math.min(0.92, h * 0.62),
+      stone = material("#f1ebe2", 0.24),
+      kick = 0.09,
+      ribbonY = top + (h - top) * 0.62,
+      parts: THREE.BufferGeometry[] = [];
+    box(g, [w * 0.97, kick, d * 0.86], dark, [0, kick / 2, 0]);
+    box(g, [w * 0.97, top - kick - 0.05, d * 0.9], body, [0, (top - 0.05 + kick) / 2, 0], 0.02);
+    fluted(g, w * 0.97, top - kick - 0.05, (top - 0.05 + kick) / 2, d * 0.45, body);
+    box(g, [w, 0.05, d], stone, [0, top - 0.025, 0], 0.016);
+    lit(box(g, [w * 0.9, 0.012, 0.02], glow(), [0, top - 0.06, d / 2 + 0.003]));
+    box(g, [w * 0.92, h - top, 0.04], tinted(item.color, -0.06), [0, (h + top) / 2, -d * 0.4], 0.012);
+    rod(g, new THREE.Vector3(-w * 0.42, ribbonY, -d * 0.32), new THREE.Vector3(w * 0.42, ribbonY, -d * 0.32), 0.01, brass());
+    const spools = Math.max(5, Math.round(w / 0.16));
+    for (let i = 0; i < spools; i++)
+      parts.push(painted(new THREE.CylinderGeometry(0.055, 0.055, 0.06, 16).rotateZ(Math.PI / 2), PRODUCT_TONES[i % PRODUCT_TONES.length]).translate(-w * 0.38 + (i * w * 0.76) / (spools - 1), ribbonY, -d * 0.32));
+    for (const [x, z, s, tone] of [[-w * 0.3, d * 0.05, 0.24, "#f3ece2"], [-w * 0.3, d * 0.05, 0.17, "#c5837a"], [w * 0.05, d * 0.1, 0.2, "#94595f"], [w * 0.3, -d * 0.02, 0.28, "#e6c4b8"]] as [number, number, number, string][]) {
+      const y = top + (s === 0.17 ? 0.25 : 0) + s * 0.4;
+      parts.push(painted(new THREE.BoxGeometry(s, s * 0.8, s), tone).translate(x, y, z));
+      parts.push(painted(new THREE.BoxGeometry(s + 0.004, s * 0.8 + 0.004, 0.025), "#b79560").translate(x, y, z));
+      parts.push(painted(new THREE.BoxGeometry(0.025, s * 0.8 + 0.004, s + 0.004), "#b79560").translate(x, y, z));
+    }
+    const merged = mergeGeometries(parts.map((part) => part.toNonIndexed()));
+    parts.forEach((part) => part.dispose());
+    const giftMat = material("#ffffff", 0.45);
+    giftMat.vertexColors = true;
+    mesh(g, merged, giftMat);
+    const paper = cylinder(g, 0.05, 0.05, w * 0.5, material("#efe2d6", 0.8), w * 0.12, top + 0.05, -d * 0.2, 16);
+    paper.rotation.z = Math.PI / 2;
+  } else if (item.kind === "mirror-station") {
+    const top = 0.78,
+      stone = material("#f1ebe2", 0.26),
+      pedestal = w * 0.2,
+      mirrorW = w * 0.7,
+      mirrorH = Math.min(0.95, (h - top) * 0.78),
+      mirrorY = top + 0.14 + mirrorH / 2,
+      face = -d / 2 + 0.06,
+      bulbs: THREE.BufferGeometry[] = [];
+    box(g, [w, h, 0.05], tinted(item.color, -0.05), [0, h / 2, -d / 2 + 0.025], 0.012);
+    for (const side of [-1, 1]) {
+      box(g, [pedestal, top - 0.04, d * 0.9], body, [side * (w / 2 - pedestal / 2), (top - 0.04) / 2, 0], 0.014);
+      box(g, [0.1, 0.012, 0.018], brass(), [side * (w / 2 - pedestal / 2), top * 0.55, d * 0.46]);
+    }
+    box(g, [w, 0.04, d], stone, [0, top - 0.02, 0], 0.014);
+    box(g, [mirrorW, mirrorH, 0.012], mirror(), [0, mirrorY, face], 0.004).castShadow = false;
+    for (let i = 0; i < 5; i++) bulbs.push(new THREE.SphereGeometry(0.03, 10, 8).translate(-mirrorW * 0.42 + (i * mirrorW * 0.84) / 4, mirrorY + mirrorH / 2 + 0.06, face + 0.03));
+    for (const side of [-1, 1])
+      for (let i = 0; i < 4; i++) bulbs.push(new THREE.SphereGeometry(0.03, 10, 8).translate(side * (mirrorW / 2 + 0.07), mirrorY - mirrorH * 0.4 + (i * mirrorH * 0.8) / 3, face + 0.03));
+    const lights = mergeGeometries(bulbs);
+    bulbs.forEach((bulb) => bulb.dispose());
+    lit(mesh(g, lights, glow()));
+    box(g, [w, 0.12, d * 0.6], dark, [0, h - 0.06, -d * 0.2], 0.01);
+    box(g, [w * 0.22, 0.02, d * 0.34], material("#d8c9b8", 0.5), [-w * 0.24, top + 0.01, d * 0.06], 0.008);
+    products(g, [...productRow(w * 0.2, top + 0.02, d * 0.06, 4, -w * 0.24), ...productRow(w * 0.24, top, d * 0.12, 4, w * 0.26)], 0.09, 5);
   }
   g.name = item.kind;
   g.userData.itemId = item.id;
@@ -597,10 +1140,14 @@ export function createRoomScene(
   renderer.domElement.style.cssText =
     "display:block;width:100%;height:100%;touch-action:none;outline:none";
   renderer.domElement.tabIndex = 0;
-  renderer.domElement.setAttribute(
-    "aria-label",
-    "Interactive 3D room. Select furniture, drag to rearrange, or change view.",
-  );
+  const labelCanvas = () =>
+    renderer.domElement.setAttribute(
+      "aria-label",
+      isStore(state)
+        ? "Interactive 3D store. Select fixtures, drag to rearrange, or change view."
+        : "Interactive 3D room. Select furniture, drag to rearrange, or change view.",
+    );
+  labelCanvas();
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog("#344139", 18, 38);
@@ -617,6 +1164,12 @@ export function createRoomScene(
   controls.target.set(0, 0.8, 0);
   controls.addEventListener("change", () => {
     dirty = true;
+  });
+  /** True until the person moves the camera, so a resize can refit the store instead of leaving it clipped. */
+  let storeFramed = false,
+    storeCameraDistance = 0;
+  controls.addEventListener("start", () => {
+    storeFramed = false;
   });
   scene.add(new THREE.HemisphereLight("#e5eff4", "#8d7f65", 0.55));
   const sun = new THREE.DirectionalLight("#fff4de", 1.9);
@@ -653,6 +1206,66 @@ export function createRoomScene(
     overlayRoot = new THREE.Group(),
     ghostRoot = new THREE.Group();
   scene.add(roomRoot, furnitureRoot, overlayRoot, ghostRoot);
+  // Made after the post-processing passes below, so a bedroom draws exactly as before this group existed.
+  let zoneRoot: THREE.Group;
+  let zoneSignature = "";
+  /**
+   * Stone inlays under each cluster of a zone's fixtures, so a visitor reads fragrance, diagnostics, makeup,
+   * lounge and gifting at a glance. They follow the fixtures, so they move with a walkthrough.
+   */
+  function buildZones() {
+    const zoned = isStore(state)
+      ? state.layout.items.filter((item) => item.visible && ZONE_OF[item.kind])
+      : [];
+    const signature = JSON.stringify([state.layout.wallColor, zoned.map((i) => [i.kind, i.position, i.rotation, i.dimensions])]);
+    if (signature === zoneSignature) return;
+    zoneSignature = signature;
+    // Retired rather than disposed, so inlays rebuilt while fixtures move keep their compiled programs.
+    for (const child of [...zoneRoot.children]) retire(child);
+    const { width: w, depth: d } = state.room;
+    ZONES.forEach(({ kinds, color }, index) => {
+      const boxes = zoned
+        .filter((item) => kinds.includes(item.kind))
+        .map((item) => {
+          const f = getFootprint(item);
+          return [Math.min(...f.map((p) => p.x)), Math.min(...f.map((p) => p.z)), Math.max(...f.map((p) => p.x)), Math.max(...f.map((p) => p.z))];
+        });
+      // Pieces within a short walk of each other form one zone.
+      const clusters: number[][][] = [];
+      for (const b of boxes) {
+        const near = clusters.filter((c) => c.some((o) => Math.max(o[0] - b[2], b[0] - o[2], o[1] - b[3], b[1] - o[3]) < 2.6));
+        const joined = [b, ...near.flat()];
+        for (const c of near) clusters.splice(clusters.indexOf(c), 1);
+        clusters.push(joined);
+      }
+      const tone = new THREE.Color(color).lerp(new THREE.Color(state.layout.wallColor), 0.12),
+        fill = material(tone.getHex(), 0.5),
+        edge = material(tone.clone().multiplyScalar(0.82).getHex(), 0.45),
+        y = 0.0224 + index * 0.0004,
+        pad = 0.55;
+      for (const c of clusters) {
+        if (c.length < 2) continue;
+        const x0 = Math.max(-w / 2 + 0.05, Math.min(...c.map((b) => b[0])) - pad),
+          z0 = Math.max(-d / 2 + 0.05, Math.min(...c.map((b) => b[1])) - pad),
+          x1 = Math.min(w / 2 - 0.05, Math.max(...c.map((b) => b[2])) + pad),
+          z1 = Math.min(d / 2 - 0.05, Math.max(...c.map((b) => b[3])) + pad);
+        lit(box(zoneRoot, [x1 - x0, 0.002, z1 - z0], fill, [(x0 + x1) / 2, y, (z0 + z1) / 2])).castShadow = false;
+        for (const [sx, sz, px, pz] of [[x1 - x0, 0.05, (x0 + x1) / 2, z0 + 0.025], [x1 - x0, 0.05, (x0 + x1) / 2, z1 - 0.025], [0.05, z1 - z0, x0 + 0.025, (z0 + z1) / 2], [0.05, z1 - z0, x1 - 0.025, (z0 + z1) / 2]])
+          lit(box(zoneRoot, [sx, 0.002, sz], edge, [px, y + 0.0002, pz])).castShadow = false;
+      }
+    });
+    dirty = true;
+  }
+  let screensShown = false;
+  type BuiltItem = { group: THREE.Group; key: string; color: string };
+  /** Every piece built so far, hidden ones included, so showing a piece again costs nothing. */
+  const builtItems = new Map<string, BuiltItem>();
+  let retired: THREE.Object3D[] = [],
+    resizeSettleAt = 0;
+  function retire(o: THREE.Object3D) {
+    o.removeFromParent();
+    retired.push(o);
+  }
   let objectMap = new Map<string, THREE.Group>(),
     roomSignature = "",
     furnitureSignature = "",
@@ -685,6 +1298,8 @@ export function createRoomScene(
   composer.addPass(ssao);
   composer.addPass(new OutputPass());
   composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  zoneRoot = new THREE.Group();
+  scene.add(zoneRoot);
   const surfaces = createSurfaceLibrary(renderer, () => {
     roomSignature = "";
     furnitureSignature = "";
@@ -733,6 +1348,56 @@ export function createRoomScene(
   );
   sideLight.lookAt(0, 0.65, 0.4);
   scene.add(sideLight);
+  /** A store is lit from its ceiling; a room keeps its daylight setup, which these values restore exactly. */
+  let storeLit = false;
+  function lightForRoom() {
+    const store = isStore(state),
+      wasStore = storeLit,
+      { width: w, depth: d, height: h } = state.room;
+    storeLit = store;
+    if (!store && !wasStore) {
+      windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
+      sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
+      return;
+    }
+    const fog = scene.fog as THREE.Fog,
+      reach = store ? Math.hypot(w, d) / 2 + 1.5 : 5;
+    // Fog starts past the far side of the store, so its back wall never greys out.
+    fog.near = store ? Math.max(34, storeCameraDistance + Math.max(w, d) * 0.6) : 18;
+    fog.far = store ? fog.near + 46 : 38;
+    Object.assign(sun.shadow.camera, {
+      left: -reach,
+      right: reach,
+      top: reach,
+      bottom: -reach,
+      far: store ? (h * 2.8 + reach) * 2 : 22,
+    });
+    sun.shadow.camera.updateProjectionMatrix();
+    if (store) {
+      sun.position.set(w * 0.42, h * 2.8, d * 0.42);
+      sun.intensity = 0.95;
+      windowLight.position.set(0, h - 0.06, -d * 0.24);
+      sideLight.position.set(0, h - 0.06, d * 0.24);
+      for (const panel of [windowLight, sideLight]) {
+        panel.lookAt(panel.position.x, 0, panel.position.z + 0.001);
+        panel.width = w * 0.62;
+        panel.height = d * 0.32;
+        panel.intensity = 0.9;
+      }
+    } else {
+      sun.position.set(3.5, 4.5, 6);
+      sun.intensity = 1.9;
+      windowLight.width = windowLight.height = 1.5;
+      windowLight.intensity = 4;
+      sideLight.width = 1.42;
+      sideLight.height = 1.5;
+      sideLight.intensity = 3.1;
+      windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
+      windowLight.lookAt(0, 0.7, 0);
+      sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
+      sideLight.lookAt(0, 0.65, 0.4);
+    }
+  }
   function registerSource(root: THREE.Object3D) {
     sourceRoots.push(root);
     root.traverse((o) => {
@@ -861,9 +1526,21 @@ export function createRoomScene(
     const key = item.assetId?.startsWith("local:")
       ? item.assetId
       : item.assetId?.replace(/^builtin:/, "") || item.kind;
-    if (key.startsWith("local:")) ensureLocalTemplate(key);
+    if (key.startsWith("local:")) {
+      ensureLocalTemplate(key);
+      if (!glbTemplates.has(key)) {
+        const pending = new THREE.Group();
+        pending.userData.assetId = item.assetId;
+        const outline = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(item.dimensions.width,item.dimensions.height,item.dimensions.depth)),new THREE.LineBasicMaterial({color:0xdcc18c,transparent:true,opacity:.3}));
+        outline.position.y=item.dimensions.height/2;pending.add(outline);
+        return pending;
+      }
+    }
     const template = glbTemplates.get(key) || glbTemplates.get(item.kind);
-    if (!template) return buildFurniture(item);
+    if (!template) {
+      const built = buildFurniture(item);
+      return RETAIL_FIXTURES.has(item.kind) ? mergeFixture(built) : built;
+    }
     const root = new THREE.Group(),
       scaled = new THREE.Group(),
       model = template.clone(true);
@@ -951,8 +1628,9 @@ export function createRoomScene(
     const ceiling = roomRoot.getObjectByName("room-ceiling");
     if (ceiling) {
       const show =
-        state.mode === "walk" ||
-        perspective.position.y < state.room.height - 0.12;
+        camera === perspective &&
+        (state.mode === "walk" ||
+          perspective.position.y < state.room.height - 0.12);
       if (ceiling.visible !== show) {
         ceiling.visible = show;
         renderer.shadowMap.needsUpdate = true;
@@ -968,11 +1646,67 @@ export function createRoomScene(
       composer.render();
     } else renderer.render(scene, camera);
     lastRenderMs = performance.now() - before;
+    // Disposed only now, so programs they share with their replacements were reused rather than recompiled.
+    if (retired.length) {
+      retired.forEach(disposeTree);
+      retired = [];
+    }
     renderedFrames++;
     renderTimings.push(lastRenderMs);
     if (renderTimings.length > 60) renderTimings.shift();
   }
 
+  /** Pale stone with a gridded joint and an accent mat leading in from the door. */
+  function storeFloor(w: number, d: number, doorX: number, doorW: number) {
+    const stone = material("#e4dcd0", 0.42),
+      joint = material("#c9bfb1", 0.6);
+    box(roomRoot, [w, 0.022, d], stone, [0, 0.01, 0]);
+    // Large stores lay larger slabs, so the joint grid reads as stone rather than a fine mesh.
+    const slab = Math.max(w, d) > 16 ? 2 : 1.5,
+      joints: THREE.BufferGeometry[] = [];
+    for (let x = -w / 2 + slab; x < w / 2 - 0.01; x += slab)
+      joints.push(new THREE.BoxGeometry(0.008, 0.002, d).translate(x, 0.0215, 0));
+    for (let z = -d / 2 + slab; z < d / 2 - 0.01; z += slab)
+      joints.push(new THREE.BoxGeometry(w, 0.002, 0.008).translate(0, 0.0215, z));
+    if (joints.length) {
+      mesh(roomRoot, mergeGeometries(joints), joint).castShadow = false;
+      joints.forEach((part) => part.dispose());
+    }
+    box(roomRoot, [doorW, 0.003, 1.8], material(state.layout.accentColor, 0.55), [
+      doorX,
+      0.0225,
+      d / 2 - 0.9,
+    ]).castShadow = false;
+  }
+  /** Children of the ceiling mesh, so they vanish with it when the camera looks in from above. */
+  function storeCeiling(ceiling: THREE.Object3D, w: number, d: number) {
+    // About one line of light every 3.3 m across and a run every 9 m along, merged into one draw call.
+    const lines = Math.max(3, Math.round(w / 3.3)),
+      runs = Math.max(2, Math.round(d / 9)),
+      parts: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < lines; i++)
+      for (let j = 0; j < runs; j++)
+        parts.push(
+          new THREE.BoxGeometry(0.14, 0.03, (d / runs) * 0.68).translate(
+            lines === 3 ? (i - 1) * w * 0.3 : -w / 2 + ((i + 0.5) * w) / lines,
+            -0.035,
+            runs === 2 ? (j ? 1 : -1) * d * 0.26 : -d / 2 + ((j + 0.5) * d) / runs,
+          ),
+        );
+    lit(mesh(ceiling, mergeGeometries(parts), glow()));
+    parts.forEach((part) => part.dispose());
+  }
+  /** Box faces map one texture across their whole length, which stretches on store-sized walls. */
+  function tileWall(wall: THREE.Mesh) {
+    const { width, height, depth } = (wall.geometry as THREE.BoxGeometry)
+        .parameters,
+      uv = wall.geometry.attributes.uv,
+      across = Math.max(width, depth) / 2.4,
+      up = height / 2.4;
+    for (let i = 0; i < uv.count; i++)
+      uv.setXY(i, uv.getX(i) * across, uv.getY(i) * up);
+    uv.needsUpdate = true;
+  }
   function buildRoom() {
     const { width: w, depth: d, height: h, door } = state.room;
     const signature = JSON.stringify([
@@ -981,6 +1715,8 @@ export function createRoomScene(
       state.layout.accentColor,
       state.wallsVisible,
       state.mode === "walk",
+      state.mode === "plan",
+      isStore(state),
     ]);
     if (signature === roomSignature) return;
     roomSignature = signature;
@@ -992,10 +1728,11 @@ export function createRoomScene(
       trim = material("#d4cbbb");
     surfaces.apply(plaster, "plaster");
     surfaces.apply(accent, "plaster");
-    windowLight.position.set(w * 0.17, 1.6, -d / 2 + 0.16);
-    sideLight.position.set(-w / 2 + 0.16, 1.6, -d * 0.12);
+    const store = isStore(state);
+    lightForRoom();
     box(roomRoot, [w + 0.18, 0.15, d + 0.18], base, [0, -0.075, 0], 0.025);
-    const plankCount = Math.ceil(w / 0.2),
+    if (store) storeFloor(w, d, door.offset, door.width);
+    const plankCount = store ? 0 : Math.ceil(w / 0.2),
       plankW = w / plankCount;
     for (let i = 0; i < plankCount; i++) {
       const color = new THREE.Color(
@@ -1024,7 +1761,13 @@ export function createRoomScene(
     // Subtle perimeter trim outlines the room even with the cutaway walls hidden.
     box(roomRoot, [w, 0.065, 0.025], trim, [0, 0.052, -d / 2]);
     box(roomRoot, [0.025, 0.065, d], trim, [-w / 2, 0.052, 0]);
-    if (state.wallsVisible || state.mode === "walk") {
+    if (store && (state.wallsVisible || state.mode === "walk")) {
+      box(roomRoot, [w, h, 0.1], accent, [0, h / 2, -d / 2]);
+      box(roomRoot, [0.1, h, d], plaster, [-w / 2, h / 2, 0]);
+      lit(box(roomRoot, [w * 0.86, 0.03, 0.03], glow(), [0, h - 0.34, -d / 2 + 0.07]));
+      lit(box(roomRoot, [0.03, 0.03, d * 0.9], glow(), [-w / 2 + 0.07, h - 0.34, 0]));
+    }
+    if (!store && (state.wallsVisible || state.mode === "walk")) {
       const ww = Math.min(1.55, w * 0.4),
         wh = Math.min(1.55, h * 0.55),
         sill = 0.84,
@@ -1076,27 +1819,27 @@ export function createRoomScene(
         h - 0.08,
         -d / 2 + 0.025,
       ]);
-      if (state.mode === "walk") {
-        box(roomRoot, [0.1, h, d], plaster, [w / 2, h / 2, 0]);
-        const left = door.offset - door.width / 2,
-          right = door.offset + door.width / 2;
-        box(roomRoot, [Math.max(0.01, left + w / 2), h, 0.1], plaster, [
-          (-w / 2 + left) / 2,
-          h / 2,
-          d / 2,
-        ]);
-        box(roomRoot, [Math.max(0.01, w / 2 - right), h, 0.1], plaster, [
-          (right + w / 2) / 2,
-          h / 2,
-          d / 2,
-        ]);
-        box(roomRoot, [door.width, h - door.height, 0.1], plaster, [
-          door.offset,
-          (h + door.height) / 2,
-          d / 2,
-        ]);
-        box(roomRoot, [w, 0.07, d], material("#e5dfd3"), [0, h + 0.015, 0]);
-      }
+    }
+    if (state.mode === "walk") {
+      box(roomRoot, [0.1, h, d], plaster, [w / 2, h / 2, 0]);
+      const left = door.offset - door.width / 2,
+        right = door.offset + door.width / 2;
+      box(roomRoot, [Math.max(0.01, left + w / 2), h, 0.1], plaster, [
+        (-w / 2 + left) / 2,
+        h / 2,
+        d / 2,
+      ]);
+      box(roomRoot, [Math.max(0.01, w / 2 - right), h, 0.1], plaster, [
+        (right + w / 2) / 2,
+        h / 2,
+        d / 2,
+      ]);
+      box(roomRoot, [door.width, h - door.height, 0.1], plaster, [
+        door.offset,
+        (h + door.height) / 2,
+        d / 2,
+      ]);
+      box(roomRoot, [w, 0.07, d], material("#e5dfd3"), [0, h + 0.015, 0]).castShadow = !store;
     }
     if (
       (state.wallsVisible || state.mode === "walk") &&
@@ -1108,7 +1851,8 @@ export function createRoomScene(
         0,
       ]);
       ceiling.name = "room-ceiling";
-      ceiling.castShadow = true;
+      ceiling.castShadow = !store;
+      if (store) storeCeiling(ceiling, w, d);
     }
     // Door frame is visible in plan and cutaway view; the opening stays usable.
     const doorMat = material("#786047");
@@ -1122,7 +1866,15 @@ export function createRoomScene(
       -0.004,
       d / 2 + 0.35,
     ]);
-    if (state.mode !== "plan") {
+    if (store)
+      roomRoot.traverse((o) => {
+        if (
+          o instanceof THREE.Mesh &&
+          (o.material === plaster || o.material === accent)
+        )
+          tileWall(o);
+      });
+    if (state.mode !== "plan" && !store) {
       const fan = new THREE.Group();
       fan.position.set(0, h - 0.25, -0.05);
       cylinder(fan, 0.09, 0.075, 0.12, material("#463f32"), 0, 0, 0);
@@ -1152,25 +1904,165 @@ export function createRoomScene(
     renderer.shadowMap.needsUpdate = true;
     dirty = true;
   }
+  /**
+   * Each piece keeps its own built group. Only a piece whose kind or asset changed is rebuilt; a colour change is
+   * written into the existing materials, hiding detaches the group, and moving, turning or resizing transforms it.
+   * A rebuild retires the old group until after the next frame, so its shader programs stay cached for the new one.
+   */
   function buildFurnitureGroups() {
-    const signature = JSON.stringify(state.layout.items);
-    if (signature === furnitureSignature) return;
-    furnitureSignature = signature;
-    disposeTree(furnitureRoot);
-    furnitureRoot.clear();
+    const force = furnitureSignature === "";
+    furnitureSignature = "built";
+    let changed = false,
+      resized = false;
+    const seen = new Set<string>(),
+      shown: THREE.Group[] = [];
     objectMap = new Map();
-    state.layout.items
-      .filter((i) => i.visible)
-      .forEach((item) => {
+    for (const item of state.layout.items) {
+      seen.add(item.id);
+      const key = JSON.stringify([item.kind, item.assetId ?? null]);
+      let entry = builtItems.get(item.id);
+      if (entry && (force || entry.key !== key)) {
+        retire(entry.group);
+        builtItems.delete(item.id);
+        entry = undefined;
+        changed = true;
+      }
+      if (!item.visible) continue;
+      if (!entry) {
         const g = instantiateFurniture(item);
-        g.position.set(item.position.x, 0.025, item.position.z);
-        g.rotation.y = item.rotation;
-        furnitureRoot.add(g);
-        objectMap.set(item.id, g);
-      });
-    renderer.shadowMap.needsUpdate = true;
-    dirty = true;
+        g.userData.baseDimensions = { ...item.dimensions };
+        entry = { group: g, key, color: item.color };
+        builtItems.set(item.id, entry);
+        changed = true;
+      } else if (entry.color !== item.color) {
+        entry = recolor(entry, item);
+        changed = true;
+      }
+      const group = entry.group,
+        base = group.userData.baseDimensions ?? item.dimensions,
+        sx = item.dimensions.width / base.width,
+        sy = item.dimensions.height / base.height,
+        sz = item.dimensions.depth / base.depth;
+      if (
+        group.position.x !== item.position.x ||
+        group.position.z !== item.position.z ||
+        group.rotation.y !== item.rotation ||
+        group.scale.x !== sx ||
+        group.scale.y !== sy ||
+        group.scale.z !== sz
+      ) {
+        if (group.scale.x !== sx || group.scale.y !== sy || group.scale.z !== sz) resized = true;
+        group.position.set(item.position.x, 0.025, item.position.z);
+        group.rotation.y = item.rotation;
+        group.scale.set(sx, sy, sz);
+        changed = true;
+      }
+      shown.push(group);
+      objectMap.set(item.id, group);
+    }
+    for (const [id, entry] of builtItems)
+      if (!seen.has(id)) {
+        retire(entry.group);
+        builtItems.delete(id);
+        changed = true;
+      }
+    const children = furnitureRoot.children;
+    if (children.length !== shown.length || shown.some((g, i) => children[i] !== g)) {
+      for (const child of [...children]) furnitureRoot.remove(child);
+      for (const g of shown) furnitureRoot.add(g);
+      changed = true;
+    }
+    // A resized piece is scaled while it changes, then rebuilt at its true size once it settles.
+    if (resized) resizeSettleAt = performance.now() + 450;
+    screensShown = state.layout.items.some((item) => item.visible && item.kind === "digital-wall");
+    buildZones();
+    if (changed) {
+      renderer.shadowMap.needsUpdate = true;
+      dirty = true;
+    }
   }
+  /** Writes a new colour into a piece's materials when the piece builds to the same parts; otherwise swaps it. */
+  function recolor(entry: BuiltItem, item: FurnitureItem): BuiltItem {
+    const base = entry.group.userData.baseDimensions ?? item.dimensions,
+      next = instantiateFurniture({ ...item, dimensions: { ...base } }),
+      parts = (root: THREE.Object3D) => {
+        const list: (THREE.Mesh | THREE.Line)[] = [];
+        root.traverse((o) => {
+          if (o instanceof THREE.Mesh || o instanceof THREE.Line) list.push(o);
+        });
+        return list;
+      },
+      before = parts(entry.group),
+      after = parts(next);
+    const materialsOf = (o: THREE.Mesh | THREE.Line) => (Array.isArray(o.material) ? o.material : [o.material]) as THREE.Material[];
+    const same =
+      before.length === after.length &&
+      before.every((o, i) => {
+        const a = materialsOf(o),
+          b = materialsOf(after[i]);
+        return (
+          o.type === after[i].type &&
+          o.geometry.attributes.position?.count === after[i].geometry.attributes.position?.count &&
+          a.length === b.length &&
+          a.every((m, j) => m.type === b[j].type && (m as THREE.MeshStandardMaterial).map === (b[j] as THREE.MeshStandardMaterial).map)
+        );
+      });
+    if (!same) {
+      next.userData.baseDimensions = { ...base };
+      next.position.copy(entry.group.position);
+      next.rotation.copy(entry.group.rotation);
+      next.scale.copy(entry.group.scale);
+      retire(entry.group);
+      const replaced = { group: next, key: entry.key, color: item.color };
+      builtItems.set(item.id, replaced);
+      return replaced;
+    }
+    before.forEach((o, i) => {
+      const a = materialsOf(o),
+        b = materialsOf(after[i]);
+      a.forEach((m, j) => {
+        const from = b[j] as THREE.MeshStandardMaterial & THREE.ShaderMaterial;
+        if ((m as THREE.MeshStandardMaterial).color && from.color) (m as THREE.MeshStandardMaterial).color.copy(from.color);
+        if (m instanceof THREE.ShaderMaterial && from.uniforms)
+          for (const name of ["uA", "uB", "uC"])
+            if (m.uniforms[name] && from.uniforms[name]) (m.uniforms[name].value as THREE.Color).copy(from.uniforms[name].value);
+      });
+    });
+    disposeTree(next);
+    entry.color = item.color;
+    return entry;
+  }
+  /** Pieces resized during a change are rebuilt at their true size once the change has settled. */
+  function settleResized() {
+    resizeSettleAt = 0;
+    if (dragging || pointer) {
+      resizeSettleAt = performance.now() + 450;
+      return;
+    }
+    let changed = false;
+    for (const item of state.layout.items) {
+      const entry = builtItems.get(item.id);
+      if (!entry || !item.visible) continue;
+      const g = entry.group;
+      if (g.scale.x === 1 && g.scale.y === 1 && g.scale.z === 1) continue;
+      const fresh = instantiateFurniture(item);
+      fresh.userData.baseDimensions = { ...item.dimensions };
+      fresh.position.copy(g.position);
+      fresh.rotation.copy(g.rotation);
+      retire(g);
+      builtItems.set(item.id, { group: fresh, key: entry.key, color: item.color });
+      changed = true;
+    }
+    if (!changed) return;
+    buildFurnitureGroups();
+    overlaySignature = "";
+    buildOverlays();
+  }
+  const overlayMaterials = {
+    selected: new THREE.LineBasicMaterial({ color: "#eacb88", transparent: true, opacity: 1 }),
+    clearance: new THREE.LineBasicMaterial({ color: "#e3a768", transparent: true, opacity: 0.45 }),
+    helper: new THREE.LineBasicMaterial({ color: 0xe6c78b, toneMapped: false, transparent: true, opacity: 0.85 }),
+  };
   function buildOverlays() {
     const signature = JSON.stringify([
       state.selectedId,
@@ -1180,7 +2072,10 @@ export function createRoomScene(
     ]);
     if (signature === overlaySignature) return;
     overlaySignature = signature;
-    disposeTree(overlayRoot);
+    // Outlines follow a moving piece every frame, so their materials are kept and only the geometry is renewed.
+    overlayRoot.traverse((o) => {
+      if (o instanceof THREE.Line) o.geometry.dispose();
+    });
     overlayRoot.clear();
     for (const item of state.layout.items) {
       if (!item.visible) continue;
@@ -1198,19 +2093,15 @@ export function createRoomScene(
       ].map(([x, z]) => new THREE.Vector3(x, 0.035, z));
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(points),
-        new THREE.LineBasicMaterial({
-          color: selected ? "#eacb88" : "#e3a768",
-          transparent: true,
-          opacity: selected ? 1 : 0.45,
-        }),
+        selected ? overlayMaterials.selected : overlayMaterials.clearance,
       );
       line.position.set(item.position.x, 0.025, item.position.z);
       line.rotation.y = item.rotation;
       overlayRoot.add(line);
       if (selected) {
         const helper = new THREE.BoxHelper(objectMap.get(item.id)!, 0xe6c78b);
-        helper.material.transparent = true;
-        helper.material.opacity = 0.85;
+        (helper.material as THREE.Material).dispose();
+        helper.material = overlayMaterials.helper;
         overlayRoot.add(helper);
       }
     }
@@ -1220,15 +2111,138 @@ export function createRoomScene(
     pitch = -0.04,
     lastMode = state.mode,
     lastAspect = 0;
+  /**
+   * The default store view: a fixed three-quarter direction, with distance and pan solved so the
+   * floor, the entrance and the back walls all land in the part of the canvas no overlay covers.
+   */
+  function frameStore() {
+    const { width: w, depth: d, height: h, door } = state.room,
+      hostWidth = Math.max(1, host.clientWidth),
+      hostHeight = Math.max(1, host.clientHeight),
+      inset = storeInsets(hostWidth),
+      tanV = Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2)),
+      tanH = (tanV * hostWidth) / hostHeight;
+    // Normalised screen area left for the store, from -1 to 1 on each axis.
+    const safeWidth = 2 - (4 * inset.side) / hostWidth,
+      safeBottom = -1 + (2 * Math.min(inset.bottom, hostHeight * 0.35)) / hostHeight,
+      safeTop = 1 - (2 * Math.min(inset.top, hostHeight * 0.2)) / hostHeight;
+    const toCamera = new THREE.Vector3(w * 0.56, Math.max(w, d) * 0.8, d).normalize(),
+      forward = toCamera.clone().negate(),
+      right = new THREE.Vector3().crossVectors(forward, UP).normalize(),
+      up = new THREE.Vector3().crossVectors(right, forward);
+    const outline = [
+      ...[-1, 1].flatMap((x) =>
+        [-1, 1].map((z) => new THREE.Vector3((x * w) / 2, 0, (z * d) / 2)),
+      ),
+      new THREE.Vector3(-w / 2, h, -d / 2),
+      new THREE.Vector3(w / 2, h, -d / 2),
+      new THREE.Vector3(-w / 2, h, d / 2),
+      new THREE.Vector3(door.offset - door.width / 2, 0, d / 2 + 0.7),
+      new THREE.Vector3(door.offset + door.width / 2, 0, d / 2 + 0.7),
+      // Fixtures left outside after a resize still need to show, so they can be dragged back in.
+      ...state.layout.items
+        .filter((item) => item.visible)
+        .flatMap((item) =>
+          getFootprint(item).flatMap((corner) => [
+            new THREE.Vector3(corner.x, 0, corner.z),
+            new THREE.Vector3(corner.x, item.dimensions.height, corner.z),
+          ]),
+        ),
+    ];
+    const aim = new THREE.Vector3();
+    /** Pans to centre the store in the safe area at this distance and reports whether it fits. */
+    const fits = (distance: number) => {
+      aim.set(0, h / 3, 0);
+      let spanX = 0,
+        spanY = 0;
+      for (let pass = 0; pass < 4; pass++) {
+        const eye = aim.clone().addScaledVector(toCamera, distance),
+          xs: number[] = [],
+          ys: number[] = [];
+        for (const corner of outline) {
+          const offset = corner.clone().sub(eye),
+            depth = offset.dot(forward);
+          if (depth < 0.5) return false;
+          xs.push(offset.dot(right) / (depth * tanH));
+          ys.push(offset.dot(up) / (depth * tanV));
+        }
+        const minX = Math.min(...xs),
+          maxX = Math.max(...xs),
+          minY = Math.min(...ys),
+          maxY = Math.max(...ys);
+        spanX = maxX - minX;
+        spanY = maxY - minY;
+        aim
+          .addScaledVector(right, ((minX + maxX) / 2) * distance * tanH)
+          .addScaledVector(up, ((minY + maxY - safeBottom - safeTop) / 2) * distance * tanV);
+      }
+      return spanX <= safeWidth && spanY <= safeTop - safeBottom;
+    };
+    let near = 1,
+      far = Math.max(w, d, h) * 12;
+    for (let step = 0; step < 24; step++) {
+      const middle = (near + far) / 2;
+      if (fits(middle)) far = middle;
+      else near = middle;
+    }
+    fits(far);
+    // Below the ceiling the ceiling would hide the store, so the view stays above it.
+    const distance = Math.max(far, (h + 0.6 - aim.y) / toCamera.y);
+    fits(distance);
+    perspective.up.set(0, 1, 0);
+    perspective.position.copy(aim).addScaledVector(toCamera, distance);
+    // Orbit around the floor spot under the screen centre, so the pan does not skew the orbit.
+    controls.target
+      .copy(perspective.position)
+      .addScaledVector(forward, (0.7 - perspective.position.y) / forward.y);
+    const reach = perspective.position.distanceTo(controls.target),
+      scale = Math.max(w, d);
+    controls.maxDistance = Math.max(scale * 3.2, reach * 1.3);
+    perspective.far = Math.max(100, scale * 10, reach * 3);
+    perspective.updateProjectionMatrix();
+    controls.update();
+    storeFramed = true;
+    if (storeCameraDistance !== reach) {
+      storeCameraDistance = reach;
+      lightForRoom();
+    }
+    dirty = true;
+  }
+  /** A store visitor keeps a shoulder's width from fixtures; a bedroom keeps its closer reach. */
+  const walkRadius = () => (isStore(state) ? 0.3 : 0.18);
+  /**
+   * Just inside the entrance, on whichever side of the arrival axis has the longest clear walk down the store,
+   * so the visit does not open on the hero plinth's vitrine.
+   */
+  function storeEntry() {
+    const { width: w, depth: d, door } = state.room,
+      items = state.layout.items,
+      z = d / 2 - 0.45,
+      radius = walkRadius(),
+      cap = Math.min(8, d * 0.7);
+    let best = { x: door.offset, z, score: -Infinity };
+    for (let step = -16; step <= 16; step++) {
+      const x = door.offset + step * 0.1;
+      if (Math.abs(x) > w / 2 - 0.5 || !canStand({ x, z }, items, state.room, radius)) continue;
+      let run = 0;
+      while (run < cap && canStand({ x, z: z - run - 0.1 }, items, state.room, radius)) run += 0.1;
+      const score = Math.min(run, cap) - Math.abs(x - door.offset) * 0.35;
+      if (score > best.score) best = { x, z, score };
+    }
+    return { x: best.x, z: best.z };
+  }
   function resetView() {
     const scale = Math.max(state.room.width, state.room.depth);
     if (state.mode === "walk") {
-      const entry = {
-        x: state.room.door.offset,
-        z: state.room.depth / 2 + 0.38,
-      };
+      // A store visit starts just inside the entrance, looking down the store.
+      const store = isStore(state),
+        entry = {
+          x: state.room.door.offset,
+          z: state.room.depth / 2 + (store ? -0.45 : 0.38),
+        };
+      if (store) Object.assign(entry, storeEntry());
       perspective.position.set(entry.x, 1.6, entry.z);
-      yaw = 0.12;
+      yaw = store ? 0 : 0.12;
       pitch = -0.05;
       perspective.rotation.order = "YXZ";
       perspective.rotation.set(pitch, yaw, 0);
@@ -1237,8 +2251,14 @@ export function createRoomScene(
       plan.up.set(0, 0, -1);
       plan.lookAt(0, 0, 0);
       plan.zoom = 1;
+      planFramed = true;
+      if (isStore(state)) frameStorePlan();
       plan.updateProjectionMatrix();
     } else {
+      if (isStore(state)) {
+        frameStore();
+        return;
+      }
       const aspect = Math.max(
           0.5,
           host.clientWidth / Math.max(1, host.clientHeight),
@@ -1283,16 +2303,53 @@ export function createRoomScene(
     lastAspect = aspect;
     perspective.aspect = aspect;
     perspective.updateProjectionMatrix();
-    const extent = Math.max(
-      state.room.depth * 0.67,
-      (state.room.width * 0.67) / aspect,
-    );
-    plan.left = -extent * aspect;
-    plan.right = extent * aspect;
-    plan.top = extent;
-    plan.bottom = -extent;
+    if (storeFramed && state.mode === "orbit" && isStore(state)) frameStore();
+    if (isStore(state)) frameStorePlan();
+    else {
+      const extent = Math.max(
+        state.room.depth * 0.67,
+        (state.room.width * 0.67) / aspect,
+      );
+      plan.left = -extent * aspect;
+      plan.right = extent * aspect;
+      plan.top = extent;
+      plan.bottom = -extent;
+    }
     plan.updateProjectionMatrix();
     dirty = true;
+  }
+  /** False once the plan is centred on a piece, so a resize keeps that piece in view. */
+  let planFramed = true;
+  /**
+   * The store plan, with the floor and the entrance mat fitted into the part of the canvas the floating
+   * prompt and view switcher leave clear, as frameStore does for the 3D view.
+   */
+  function frameStorePlan() {
+    const { width: w, depth: d } = state.room,
+      hostWidth = Math.max(1, host.clientWidth),
+      hostHeight = Math.max(1, host.clientHeight),
+      inset = storeInsets(hostWidth),
+      top = Math.min(inset.top, hostHeight * 0.2),
+      bottom = Math.min(inset.bottom, hostHeight * 0.35),
+      margin = 0.3,
+      minZ = -d / 2 - margin,
+      maxZ = d / 2 + 0.7 + margin,
+      perPixel = Math.max(
+        (w + margin * 2) / Math.max(1, hostWidth - inset.side * 2),
+        (maxZ - minZ) / Math.max(1, hostHeight - top - bottom),
+      ),
+      half = (perPixel * hostHeight) / 2;
+    plan.left = (-half * hostWidth) / hostHeight;
+    plan.right = (half * hostWidth) / hostHeight;
+    plan.top = half;
+    plan.bottom = -half;
+    if (planFramed) {
+      // Screen down is the store's front, so the clear area's centre sits (top - bottom) / 2 pixels below the canvas centre.
+      const z = (minZ + maxZ) / 2 - ((top - bottom) / 2) * perPixel;
+      plan.position.set(0, 12, z + 0.001);
+      plan.lookAt(0, 0, z);
+    }
+    plan.updateProjectionMatrix();
   }
   const observer = new ResizeObserver(resize);
   observer.observe(host);
@@ -1351,7 +2408,7 @@ export function createRoomScene(
     dirty = true;
   }
   function onPointerDown(event: PointerEvent) {
-    if (event.button !== 0) return;
+    if (state.presentation || event.button !== 0) return;
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (state.mode === "plan")
       renderer.domElement.setPointerCapture(event.pointerId);
@@ -1592,7 +2649,7 @@ export function createRoomScene(
               );
             }
           });
-          const size = bounds.getSize(new THREE.Vector3());
+          const size = bounds.getSize(new THREE.Vector3()).multiply(g.scale);
           return [id, { width: size.x, depth: size.z, height: size.y }];
         }),
       );
@@ -1654,13 +2711,23 @@ export function createRoomScene(
   (window as unknown as Record<string, unknown>).__roomshiftScene = observables;
   function update(next: SceneState) {
     if (lastMode !== next.mode) onPointerCancel();
+    const previous = state,
+      sameSpace = isStore(previous) === isStore(next),
+      // A store's framing comes from its size, so a new size needs a new view. A bedroom keeps its camera.
+      refit =
+        isStore(next) &&
+        JSON.stringify(previous.room) !== JSON.stringify(next.room);
     state = next;
+    labelCanvas();
     camera = state.mode === "plan" ? plan : perspective;
     controls.enabled = state.mode === "orbit";
     if (lastMode !== state.mode) {
       keys.clear();
       pointer = null;
       lastMode = state.mode;
+      resetView();
+    } else if (!sameSpace || refit) {
+      storeFramed = false;
       resetView();
     }
     walkPad.style.display = state.mode === "walk" ? "grid" : "none";
@@ -1671,12 +2738,20 @@ export function createRoomScene(
     resize();
     dirty = true;
   }
-  let last = performance.now();
+  let last = performance.now(),
+    lastScreenFrame = 0;
+  /** Digital walls drift at about 30 frames a second, and hold still for anyone who asks for reduced motion. */
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   function frame(now: number) {
     if (disposed) return;
     const dt = Math.min((now - last) / 1000, 0.045);
     last = now;
     if (state.mode === "orbit") controls.update();
+    if (screensShown && state.mode !== "plan" && !reducedMotion?.matches && now - lastScreenFrame > 32) {
+      lastScreenFrame = now;
+      screenClock.value = 8 + now / 1000;
+      dirty = true;
+    }
     if (state.mode === "walk") {
       const f =
           Number(keys.has("w") || keys.has("arrowup")) -
@@ -1685,26 +2760,29 @@ export function createRoomScene(
           Number(keys.has("d") || keys.has("arrowright")) -
           Number(keys.has("a") || keys.has("arrowleft"));
       if (f || s) {
-        const speed =
-          (dt * (keys.has("shift") ? 2 : 1.1)) / Math.max(1, Math.hypot(f, s));
+        // A store floor is several times a bedroom's, so walking there is brisker.
+        const pace = isStore(state) ? (keys.has("shift") ? 3.4 : 1.9) : keys.has("shift") ? 2 : 1.1,
+          speed = (dt * pace) / Math.max(1, Math.hypot(f, s));
         const dx = (-Math.sin(yaw) * f + Math.cos(yaw) * s) * speed,
           dz = (-Math.cos(yaw) * f - Math.sin(yaw) * s) * speed;
         const x = perspective.position.x,
           z = perspective.position.z;
-        if (canStand({ x: x + dx, z }, state.layout.items, state.room, 0.18))
+        const radius = walkRadius();
+        if (canStand({ x: x + dx, z }, state.layout.items, state.room, radius))
           perspective.position.x += dx;
         if (
           canStand(
             { x: perspective.position.x, z: z + dz },
             state.layout.items,
             state.room,
-            0.18,
+            radius,
           )
         )
           perspective.position.z += dz;
         dirty = true;
       }
     }
+    if (resizeSettleAt && now >= resizeSettleAt) settleResized();
     if (dirty) {
       renderScene();
       dirty = false;
@@ -1723,10 +2801,12 @@ export function createRoomScene(
     const item = state.layout.items.find((i) => i.id === id);
     if (!item) return;
     if (state.mode === "plan") {
+      planFramed = false;
       plan.position.set(item.position.x, 12, item.position.z + 0.001);
       plan.lookAt(item.position.x, 0, item.position.z);
       setPlanZoom(1.6);
     } else {
+      storeFramed = false;
       const distance =
         Math.max(item.dimensions.width, item.dimensions.depth) * 1.4 + 0.8;
       controls.target.set(
@@ -1765,6 +2845,11 @@ export function createRoomScene(
       renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
       renderer.domElement.removeEventListener("wheel", onWheel);
       disposeTree(scene);
+      retired.forEach(disposeTree);
+      Object.values(overlayMaterials).forEach((m) => m.dispose());
+      builtItems.forEach(({ group }) => {
+        if (!group.parent) disposeTree(group);
+      });
       sourceRoots.forEach(disposeTree);
       sourceTextures.forEach((t) => t.dispose());
       surfaces.dispose();

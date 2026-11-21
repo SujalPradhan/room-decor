@@ -1,6 +1,6 @@
 # Product links → furniture you can try in Roomshift
 
-Proposed plan, 28 October 2026. Awaiting user review before feature implementation. Research used three parallel audits: retailer access, model-generation providers, and reuse from RoomRemix.
+Approved plan, 28 October 2026. Implementation follows the user’s explicit instruction to keep paid generation disabled. Research used three parallel audits: retailer access, model-generation providers, and reuse from RoomRemix.
 
 ## Preserve the current release
 
@@ -177,3 +177,14 @@ Require owner-scoped reads, writes, exports and private asset links. A public ed
 - [ ] Refresh/reconnect/restart restores processing and accounting status; unavailable reconciliation APIs show a clear limitation rather than a fabricated final bill.
 
 Delivery order is **ledger and limits → Cost & time UI with local/test records → instrumented provider pilot → reconciliation/export checks → public generation release**. Build product-review/size-preview UX alongside the first steps, but do not run the generation proof or enable paid public operations before metering is active. This section remains a proposed plan, not implemented functionality or authorization to spend.
+
+
+## Delivered release — 29 October 2026
+
+Product review is integrated into Add furniture and replacement. Amazon India and Flipkart links use bounded, deterministic server extraction; blocked pages retain a manual specifications/photo path. Unknown dimensions stay blank. Reviewed dimensions produce an explicitly approximate category model; a supplied GLB can provide detailed appearance. Before/After and confirmation preserve Original and support one-step undo. My products persists locally, with private account storage and uploads when signed in.
+
+Cost & time records new browser scene/PNG work, product lookups, photos, model imports and downloads. It separates actual provider usage from quotes, currencies and credit units, with activity filters and CSV. Browser operations stay on this device; signed-in server operations are account scoped. No past room-processing costs are invented. Room reconstruction and model inference are not performed by this release.
+
+Paid generation is blocked by a source-level switch before body parsing, storage or provider calls, independent of credentials or client flags. Provider job/reservation code is covered with mocked responses; live Meshy output quality, billing and end-to-end generation remain unverified. There are no live generation calls or authorized credits in this release. Photo cropping and inferred 3D from arbitrary listing photographs remain follow-up work.
+
+Validation: TypeScript and production Worker build pass; 74 unit/backend tests and 24 integrated Chromium workflows pass on the M4 Metal renderer. Separate 1440×1000 and 390×844 browser checks cover manual specification parsing, paused-generation messaging, processing history, viewport bounds and browser errors. Tests cover owner isolation with SQLite, redirect/SSRF restrictions, provider mocks, credit idempotency, dimension drafts, Original preservation, undo, reload and imported GLB rendering. Real retailer extraction is best-effort; live provider generation remains disabled and untested.

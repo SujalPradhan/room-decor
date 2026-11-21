@@ -1,0 +1,114 @@
+{
+  "analysis": {
+    "imageMeasurements": [
+      {
+        "imageId": "listing-1",
+        "axis": "width",
+        "value": 32.5,
+        "unit": "in",
+        "scope": "outer",
+        "pose": "upright",
+        "evidence": "32.5\""
+      },
+      {
+        "imageId": "listing-1",
+        "axis": "height",
+        "value": 42.9,
+        "unit": "in",
+        "scope": "outer",
+        "pose": "upright",
+        "evidence": "42.9\""
+      },
+      {
+        "imageId": "listing-1",
+        "axis": "height",
+        "value": 25.5,
+        "unit": "in",
+        "scope": "part",
+        "pose": "upright",
+        "evidence": "25.5\""
+      },
+      {
+        "imageId": "listing-1",
+        "axis": "depth",
+        "value": 20,
+        "unit": "in",
+        "scope": "seat",
+        "pose": "upright",
+        "evidence": "20\""
+      },
+      {
+        "imageId": "listing-2",
+        "axis": "depth",
+        "value": 32.9,
+        "unit": "in",
+        "scope": "outer",
+        "pose": "reclined",
+        "evidence": "32.9 \""
+      },
+      {
+        "imageId": "listing-2",
+        "axis": "height",
+        "value": 17,
+        "unit": "in",
+        "scope": "part",
+        "pose": "reclined",
+        "evidence": "17\""
+      },
+      {
+        "imageId": "listing-2",
+        "axis": "height",
+        "value": 15,
+        "unit": "in",
+        "scope": "part",
+        "pose": "reclined",
+        "evidence": "15\""
+      }
+    ],
+    "title": "SNUZSPACE Fabric Manual Recliner",
+    "kind": "chair",
+    "variant": "Brown \u00b7 ReclinerM-Pinnacle-B",
+    "selectedImageId": "listing-0",
+    "cropBox": [
+      0.09999,
+      0,
+      0.89999,
+      0.99999
+    ],
+    "pose": "upright",
+    "dimensions": [
+      {
+        "axis": "width",
+        "value": 83.56,
+        "unit": "cm",
+        "imageId": "listing",
+        "evidence": "Width: 83.56 cm",
+        "confidence": "high",
+        "conflicting": false
+      },
+      {
+        "axis": "depth",
+        "value": 82.55,
+        "unit": "cm",
+        "imageId": "listing",
+        "evidence": "Depth: 82.55 cm",
+        "confidence": "high",
+        "conflicting": false
+      },
+      {
+        "axis": "height",
+        "value": 109,
+        "unit": "cm",
+        "imageId": "listing",
+        "evidence": "Height: 109 cm",
+        "confidence": "high",
+        "conflicting": false
+      }
+    ],
+    "warnings": []
+  },
+  "usageMetadata": {
+    "promptTokenCount": 1749,
+    "candidatesTokenCount": 466
+  }
+}
