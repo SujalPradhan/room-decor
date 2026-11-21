@@ -1,9 +1,12 @@
 import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
+import { routeTowerRoom } from "../server/tower-room";
 
 const worker = {
-  fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+  async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+    const room = await routeTowerRoom(request, env as unknown as Parameters<typeof routeTowerRoom>[1]);
+    if (room) return room;
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and
     // the auxiliary service binding are absent from production builds.
@@ -28,4 +31,5 @@ const worker = {
 };
 
 export { LayoutAgentBudget } from "../server/agent-budget";
+export { TowerRoom } from "../server/tower-room";
 export default worker;

@@ -104,3 +104,16 @@
   .tower-rail { width:50px; right:8px; top:8px; bottom:8px; padding:6px 4px; }
   .tower-legend { left:8px; bottom:8px; font-size:10px; gap:6px; }
 }
+.tower-share,.tower-guest { display:flex; align-items:center; flex-wrap:wrap; gap:8px 10px; margin:12px 30px 0; padding:8px 12px; border-radius:12px; background:var(--panel,#242e28); border:1px solid #dabe8944; color:#c6cdbd; font-size:12px; }
+.tower-share > svg,.tower-guest > svg { flex:none; color:var(--gold,#dabe89); }
+.tower-share-link { flex:1 1 220px; min-width:0; min-height:34px; padding:6px 10px; border-radius:8px; background:#00000026; border:1px solid #ffffff1c; color:#e8e5d7; font-size:12px; font-family:inherit; }
+.tower-share-count { display:inline-flex; align-items:center; gap:6px; color:#8fe3bb; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.tower-guest b { flex:1 1 160px; font-weight:600; color:#e8e5d7; }
+.tower-guest.is-off { border-color:#e0a94a66; }
+.tower-guest.is-off svg { color:#e0a94a; }
+@media (max-width:640px) {
+  .tower-share,.tower-guest { margin:10px 16px 0; padding:8px 10px; }
+  .tower-share-link { flex-basis:100%; order:1; }
+  .tower-share > svg { display:none; }
+  .tower-guest .lab-primary { flex:1 1 100%; }
+}

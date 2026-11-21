@@ -27,6 +27,8 @@ const localBindingConfig = {
         },
       ]
     : [],
+  durable_objects: { bindings: [{ name: "TOWER_ROOM", class_name: "TowerRoom" }] },
+  migrations: [{ tag: "tower-room-v1", new_sqlite_classes: ["TowerRoom"] }],
   r2_buckets: r2
     ? [
         {

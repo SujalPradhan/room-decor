@@ -59,3 +59,35 @@ for (const side of ['RH', 'LH']) {
     expect(download.suggestedFilename()).toMatch(/\.stl$/);
   });
 }
+
+test('summary and downloads sit at the top, counts open the matching clauses', async ({ page }) => {
+  const errors = watchErrors(page);
+  await fresh(page);
+  const top = page.getByRole('region', { name: 'Verification summary and downloads' });
+  await expect(top.getByRole('button', { name: '9 FAIL, show in the report' })).toBeVisible();
+  const box = await top.boundingBox();
+  expect(box!.y).toBeLessThan(300);
+  await top.getByRole('button', { name: '9 FAIL, show in the report' }).click();
+  await expect(page.locator('tr.bracket-row.is-fail .bracket-expand[aria-expanded="true"]')).toHaveCount(9);
+  await expect(page.locator('tr.bracket-row.is-pass .bracket-expand[aria-expanded="true"]')).toHaveCount(0);
+  const [file] = await Promise.all([page.waitForEvent('download'), top.getByRole('button', { name: 'Report (.md)' }).click()]);
+  expect(file.suggestedFilename()).toBe('riser-verification-report.md');
+  expect(errors).toEqual([]);
+});
+
+test('three variations load into the 3D view and the report, and undo returns', async ({ page }) => {
+  const errors = watchErrors(page);
+  await fresh(page);
+  const variations = page.getByRole('region', { name: 'Variations' });
+  await expect(variations.locator('.bracket-variant')).toHaveCount(3);
+  const top = page.getByRole('region', { name: 'Verification summary and downloads' });
+  await variations.getByRole('button', { name: /^Most margin: 663 g/ }).click();
+  await expect(variations.getByRole('button', { name: /^Most margin/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(top.getByRole('button', { name: '0 FAIL, show in the report' })).toBeVisible();
+  await expect(top).toContainText('Most margin');
+  await variations.getByRole('button', { name: /^Lightest: 331 g/ }).click();
+  await expect(page.getByRole('region', { name: 'Key numbers' })).toContainText('331 g');
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(variations.getByRole('button', { name: /^Most margin/ })).toHaveAttribute('aria-pressed', 'true');
+  expect(errors).toEqual([]);
+});

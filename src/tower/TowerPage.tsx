@@ -1,8 +1,13 @@
-import { ArrowLeft, BedDouble, Box, Building2, CheckCircle2, FlaskConical, Loader2, Pin, PinOff, Plane, RotateCcw, Sparkles, Square, Store, Wrench } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, BedDouble, Box, Building2, CheckCircle2, FlaskConical, Loader2, Pin, PinOff, Plane, RotateCcw, Share2, Sparkles, Square, Store, Wrench } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CATALOG, furnish, parseBriefDefaults } from './furnish';
 import { runTowerAgent, type TowerStep } from './tower-agent';
-import { createTowerScene } from './tower-scene';
+import { createTowerScene, type TowerScene, type TowerSceneCallbacks } from './tower-scene';
+import {
+  HOST_COLOR, POSE_INTERVAL_MS, connectRoom, followCodeFromUrl, hasFollowParam, loadHostSession, makeCode, makeSecret, peerColor, saveHostSession, throttle,
+  type PeerInfo, type Pose, type RoomConnection, type RoomStatus, type ServerMessage, type ShareState,
+} from './tower-share';
+import { GuestBanner, SharePanel } from './TowerShare';
 import { TOWER, formatINR, unitById, unitsOnFloor } from './tower';
 import type { Brief, Facing, FurnishResult, Piece, Style, Unit, UnitType } from './model';
 import TowerCompare from './TowerCompare';
@@ -27,6 +32,13 @@ const SQFT = 10.764;
 
 interface Filters { type: 'all' | UnitType; facing: 'all' | Facing; maxPrice: number }
 interface Saved { filters: Filters; brief: Brief; pins: string[] }
+
+type SceneApi = TowerScene & {
+  getView?(): Pose;
+  setView?(pose: Pose, opts?: { smooth?: boolean }): void;
+  setPeers?(peers: { id: string; label: string; color: string; pose: Pose }[]): void;
+};
+interface PeerPose { label: string; pose: Pose; exploring: boolean }
 
 const DEFAULT_BRIEF: Brief = parseBriefDefaults({ occupants: 2, wfh: 1, kids: 0, pets: [], budgetINR: 600000, style: 'warm-minimal', notes: '' });
 
@@ -71,22 +83,168 @@ export default function TowerPage() {
   const container = useRef<HTMLDivElement>(null);
   const scene = useRef<ReturnType<typeof createTowerScene> | null>(null);
   const runCount = useRef(0);
+  const [shareCode, setShareCode] = useState<string | null>(null);
+  const [guestCode, setGuestCode] = useState<string | null>(null);
+  const [badLink, setBadLink] = useState(false);
+  const [roomStatus, setRoomStatus] = useState<RoomStatus>('closed');
+  const [peers, setPeers] = useState<PeerInfo[]>([]);
+  const [following, setFollowing] = useState(true);
+  const [hostPresent, setHostPresent] = useState(true);
+  const conn = useRef<RoomConnection | null>(null);
+  const secret = useRef('');
+  const followingRef = useRef(true);
+  const hostState = useRef<ShareState | null>(null);
+  const hostPose = useRef<Pose | null>(null);
+  const hostHere = useRef(true);
+  const peerPoses = useRef(new Map<string, PeerPose>());
+  const lastView = useRef<Pose | null>(null);
+  const sendPose = useRef<(pose: Pose) => void>(() => { });
+  const lockedRef = useRef(false);
+  const settle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const isGuest = guestCode !== null || badLink;
+  const locked = guestCode !== null && following;
+  lockedRef.current = locked;
 
   const unit = unitId ? unitById(unitId) ?? null : null;
   const shownFloor = mode === 'tower' ? hoverFloor ?? floor : unit?.floor ?? null;
   const flat = unit ? unit.priceINR : 0;
 
-  useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { } }, [saved]);
+  useEffect(() => { if (hasFollowParam(window.location.search)) return; try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { } }, [saved]);
 
   useEffect(() => {
     if (!container.current) return;
-    const instance = createTowerScene(container.current, {
-      onHoverFloor: f => setHoverFloor(f),
-      onPickUnit: id => { setUnitId(id); setFloor(unitById(id)?.floor ?? null); },
-    });
+    const callbacks: TowerSceneCallbacks & { onViewChange?(pose: Pose): void } = {
+      onHoverFloor: f => { if (!lockedRef.current) setHoverFloor(f); },
+      onPickUnit: id => { if (lockedRef.current) return; setUnitId(id); setFloor(unitById(id)?.floor ?? null); },
+      onViewChange: pose => { lastView.current = pose; sendPose.current(pose); },
+    };
+    const instance = createTowerScene(container.current, callbacks);
     scene.current = instance;
     return () => { scene.current = null; instance.dispose(); };
   }, []);
+
+  const api = () => scene.current as SceneApi | null;
+  const refreshMarkers = useCallback(() => {
+    const list: { id: string; label: string; color: string; pose: Pose }[] = [];
+    if (guestRef.current) {
+      if (!followingRef.current && hostHere.current && hostPose.current) list.push({ id: 'host', label: 'Host', color: HOST_COLOR, pose: hostPose.current });
+    } else for (const [id, peer] of peerPoses.current) if (peer.exploring) list.push({ id, label: peer.label, color: peerColor(id), pose: peer.pose });
+    (scene.current as SceneApi | null)?.setPeers?.(list);
+  }, []);
+  const guestRef = useRef(false);
+  guestRef.current = guestCode !== null;
+
+  const applyState = useCallback((s: ShareState) => {
+    setMode(s.mode); setFloor(s.floor); setUnitId(s.unitId); setResult(s.furnish); setReply(s.reply ?? null); setWhys(s.whys ?? []);
+    setFocus(null); setSteps([]); setError(null);
+    setMorph(prev => s.key.startsWith('run-') ? (prev?.key === s.key ? prev : { key: s.key, ms: MORPH_MS }) : null);
+    clearTimeout(settle.current);
+    settle.current = setTimeout(() => { if (followingRef.current && hostPose.current) (scene.current as SceneApi | null)?.setView?.(hostPose.current, { smooth: true }); }, 2600);
+  }, []);
+
+  useEffect(() => {
+    const search = window.location.search;
+    if (hasFollowParam(search)) {
+      const code = followCodeFromUrl(search);
+      if (code) setGuestCode(code); else setBadLink(true);
+      return;
+    }
+    const saved = loadHostSession();
+    if (saved) { secret.current = saved.secret; setShareCode(saved.code); }
+  }, []);
+
+  useEffect(() => {
+    if (!guestCode) return;
+    const send = throttle((pose: Pose) => { if (!followingRef.current) conn.current?.send({ t: 'pose', pose, exploring: true }); }, POSE_INTERVAL_MS);
+    sendPose.current = send;
+    const onMessage = (m: ServerMessage) => {
+      if (m.t === 'welcome') {
+        hostHere.current = m.hostPresent; setHostPresent(m.hostPresent); setPeers(m.peers);
+        if (m.state) hostState.current = m.state;
+        if (m.hostPose) hostPose.current = m.hostPose;
+        if (followingRef.current) {
+          if (m.state) applyState(m.state);
+          if (m.hostPose) (scene.current as SceneApi | null)?.setView?.(m.hostPose, { smooth: false });
+        }
+      } else if (m.t === 'state') {
+        hostState.current = m.state; hostHere.current = true; setHostPresent(true);
+        if (followingRef.current) applyState(m.state);
+      } else if (m.t === 'pose' && m.role === 'host') {
+        hostPose.current = m.pose;
+        if (followingRef.current) (scene.current as SceneApi | null)?.setView?.(m.pose, { smooth: true });
+        refreshMarkers();
+      } else if (m.t === 'peers') {
+        setPeers(m.peers);
+        const here = m.peers.some(p => p.role === 'host');
+        hostHere.current = here; setHostPresent(here);
+        refreshMarkers();
+      } else if (m.t === 'host-left') { hostHere.current = false; setHostPresent(false); refreshMarkers(); }
+    };
+    const c = connectRoom({ code: guestCode, role: 'guest', onMessage, onStatus: setRoomStatus });
+    conn.current = c;
+    return () => { send.cancel(); sendPose.current = () => { }; c.close(); conn.current = null; };
+  }, [guestCode, applyState, refreshMarkers]);
+
+  useEffect(() => {
+    if (!shareCode) return;
+    const send = throttle((pose: Pose) => { conn.current?.send({ t: 'pose', pose }); }, POSE_INTERVAL_MS);
+    sendPose.current = send;
+    const onMessage = (m: ServerMessage) => {
+      if (m.t === 'welcome' || m.t === 'peers') {
+        setPeers(m.peers);
+        const alive = new Set(m.peers.map(p => p.id));
+        for (const id of [...peerPoses.current.keys()]) if (!alive.has(id)) peerPoses.current.delete(id);
+        refreshMarkers();
+      } else if (m.t === 'pose' && m.role === 'guest') {
+        const label = peersRef.current.find(p => p.id === m.from)?.label ?? 'Guest';
+        peerPoses.current.set(m.from, { label, pose: m.pose, exploring: m.exploring === true });
+        refreshMarkers();
+      }
+    };
+    const c = connectRoom({
+      code: shareCode, role: 'host', secret: secret.current, onMessage,
+      onStatus: status => { setRoomStatus(status); },
+    });
+    conn.current = c;
+    return () => { send.cancel(); sendPose.current = () => { }; c.close(); conn.current = null; peerPoses.current.clear(); refreshMarkers(); };
+  }, [shareCode, refreshMarkers]);
+
+  const peersRef = useRef<PeerInfo[]>([]);
+  peersRef.current = peers;
+
+  useEffect(() => {
+    if (!shareCode || roomStatus !== 'open') return;
+    const state: ShareState = { mode, floor, unitId, furnish: mode === 'unit' ? result : null, key: morph?.key ?? `${mode}-${unitId ?? 'none'}`, reply, whys };
+    conn.current?.send({ t: 'state', state });
+    const pose = lastView.current ?? api()?.getView?.();
+    if (pose) conn.current?.send({ t: 'pose', pose });
+  }, [shareCode, roomStatus, mode, floor, unitId, result, reply, whys, morph?.key]);
+
+  const startSharing = () => {
+    const code = makeCode();
+    secret.current = makeSecret();
+    saveHostSession({ code, secret: secret.current });
+    setShareCode(code);
+  };
+  const stopSharing = () => { saveHostSession(null); setShareCode(null); setPeers([]); setRoomStatus('closed'); };
+
+  const toggleFollow = () => {
+    const next = !followingRef.current;
+    followingRef.current = next;
+    setFollowing(next);
+    if (next) {
+      if (hostState.current) applyState(hostState.current);
+      if (hostPose.current) api()?.setView?.(hostPose.current, { smooth: true });
+      const pose = lastView.current ?? hostPose.current;
+      if (pose) conn.current?.send({ t: 'pose', pose, exploring: false });
+    } else {
+      clearTimeout(settle.current);
+      const pose = api()?.getView?.() ?? lastView.current ?? hostPose.current;
+      if (pose) conn.current?.send({ t: 'pose', pose, exploring: true });
+    }
+    refreshMarkers();
+  };
+  useEffect(() => () => clearTimeout(settle.current), []);
 
   const highlight = useMemo(() => result?.issues.flatMap(i => i.pieceId ? [i.pieceId] : []) ?? [], [result]);
 
@@ -160,9 +318,13 @@ export default function TowerPage() {
       </div>
       <h1>Tower Lab</h1>
       <div className="lab-top-actions">
-        <button type="button" className="lab-ghost" onClick={reset}><RotateCcw size={14} /> Start over</button>
+        {!isGuest && <button type="button" className="lab-ghost" aria-pressed={shareCode !== null} onClick={shareCode ? stopSharing : startSharing}><Share2 size={14} aria-hidden /> {shareCode ? 'Stop sharing' : 'Share tour'}</button>}
+        <button type="button" className="lab-ghost" disabled={locked} onClick={reset}><RotateCcw size={14} /> Start over</button>
       </div>
     </header>
+    {shareCode && <SharePanel code={shareCode} guests={peers.filter(p => p.role === 'guest').length} status={roomStatus} />}
+    {guestCode && <GuestBanner status={roomStatus} following={following} hostPresent={hostPresent} onToggle={toggleFollow} />}
+    {badLink && <GuestBanner status="failed" following hostPresent onToggle={() => { }} />}
     <p className="lab-intro">{TOWER.name}, {TOWER.city}. Pick a floor, pick a flat and fly in. The agent furnishes it to your brief, checks that every piece fits and shows the furnishing cost next to the flat price.</p>
     <main className={`lab-main tower-main${mode === 'unit' ? ' is-unit' : ''}`}>
       <div className="lab-left">
@@ -181,7 +343,7 @@ export default function TowerPage() {
           </label>
           <button type="button" className="lab-ghost" onClick={() => scene.current?.resetView()}>Reset view</button>
         </div> : <div className="lab-toolbar" role="toolbar" aria-label="Flat view">
-          <button type="button" className="lab-ghost" onClick={back}><ArrowLeft size={14} /> Back to tower</button>
+          <button type="button" className="lab-ghost" disabled={locked} onClick={back}><ArrowLeft size={14} /> Back to tower</button>
           <button type="button" className="lab-ghost" onClick={() => scene.current?.resetView()}>Reset view</button>
           {unit && <span className="tower-crumb">{TOWER.name} / Floor {unit.floor} / {unit.id} {unit.type}</span>}
         </div>}
@@ -193,7 +355,7 @@ export default function TowerPage() {
             <ol>
               {FLOORS.map(f => {
                 const n = availableOn(f);
-                return <li key={f}><button type="button" className={`${shownFloor === f ? 'is-on' : ''}${n === 0 ? ' is-none' : ''}`} aria-pressed={floor === f} aria-label={`Floor ${f}, ${n} available`}
+                return <li key={f}><button type="button" disabled={locked} className={`${shownFloor === f ? 'is-on' : ''}${n === 0 ? ' is-none' : ''}`} aria-pressed={floor === f} aria-label={`Floor ${f}, ${n} available`}
                   onMouseEnter={() => setHoverFloor(f)} onMouseLeave={() => setHoverFloor(null)} onFocus={() => setHoverFloor(f)} onBlur={() => setHoverFloor(null)}
                   onClick={() => { setFloor(f); if (unit && unit.floor !== f) setUnitId(null); }}>
                   <b>{f}</b><i>{n}</i>
@@ -218,7 +380,7 @@ export default function TowerPage() {
             <div><dt>Per sq ft</dt><dd>{rupees(unit.priceINR / unit.carpetSqft)}</dd></div>
           </dl>
           <div className="tower-card-actions">
-            <button type="button" className="lab-primary" onClick={flyIn}><Plane size={14} aria-hidden /> Fly in</button>
+            <button type="button" className="lab-primary" disabled={locked} onClick={flyIn}><Plane size={14} aria-hidden /> Fly in</button>
             <button type="button" className="lab-ghost" aria-pressed={pins.includes(unit.id)} onClick={() => togglePin(unit.id)}>{pins.includes(unit.id) ? <PinOff size={14} aria-hidden /> : <Pin size={14} aria-hidden />}{pins.includes(unit.id) ? 'Unpin' : 'Pin to compare'}</button>
           </div>
         </section>}
@@ -229,7 +391,7 @@ export default function TowerPage() {
           <ul>
             {floorUnits.map(u => {
               const ok = matches(u, filters);
-              return <li key={u.id}><button type="button" className={`tower-unit is-${u.status}${unitId === u.id ? ' is-picked' : ''}${ok ? '' : ' is-filtered'}`} aria-pressed={unitId === u.id} onClick={() => setUnitId(u.id)}>
+              return <li key={u.id}><button type="button" disabled={locked} className={`tower-unit is-${u.status}${unitId === u.id ? ' is-picked' : ''}${ok ? '' : ' is-filtered'}`} aria-pressed={unitId === u.id} onClick={() => setUnitId(u.id)}>
                 <b>{u.id}</b><span>{u.type}, {u.carpetSqft.toLocaleString('en-IN')} sq ft</span><span>{formatINR(u.priceINR)}</span><em>{u.status}</em>
               </button></li>;
             })}
@@ -244,7 +406,7 @@ export default function TowerPage() {
         </section>}
       </div>
       {mode === 'unit' && unit && <aside className="lab-side" aria-label="Agent">
-        <form className="lab-agent tower-agent" onSubmit={e => { e.preventDefault(); void ask(text); }}>
+        {!isGuest && <form className="lab-agent tower-agent" onSubmit={e => { e.preventDefault(); void ask(text); }}>
           <label htmlFor="tower-request"><Sparkles size={14} aria-hidden /> Furnishing agent</label>
           <div className="tower-brief">
             <div className="tower-field"><span>People</span><div className="lab-seg" role="group" aria-label="People">{[1, 2, 3, 4, 5].map(n => <button key={n} type="button" aria-pressed={brief.occupants === n} className={brief.occupants === n ? 'active' : ''} onClick={() => setBrief({ occupants: n })}>{n}</button>)}</div></div>
@@ -261,7 +423,7 @@ export default function TowerPage() {
           {busy ? <div className="tower-busy"><span className="lab-busy" role="status"><Loader2 size={14} className="lab-spin" aria-hidden />The agent is furnishing and checking…</span><button type="button" className="lab-ghost" onClick={stop}><Square size={11} /> Stop</button></div>
             : <button type="submit" className="lab-primary tower-go">Furnish it for me</button>}
           {error && <p className="tower-error" role="alert">{error}</p>}
-        </form>
+        </form>}
         <StepList steps={steps} running={busy} />
         {result && !busy && <section className="tower-result" aria-label="Furnishing result">
           <h3>Furnishing</h3>

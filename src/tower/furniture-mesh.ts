@@ -1,15 +1,83 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { Piece } from './model';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type { FurnitureKind, Piece } from './model';
+
+export const MODEL_KINDS: FurnitureKind[] = ['sofa', 'armchair', 'coffee-table', 'tv-unit', 'dining-table', 'dining-chair', 'side-table', 'desk', 'bookshelf', 'plant'];
+export const modelUrl = (kind: FurnitureKind) => `/assets/tower/furniture/${kind}.glb`;
 
 export interface FurnitureKit {
   build(piece: Piece, glow?: boolean): THREE.Group;
+  load(): Promise<void>;
+  hasModel(kind: FurnitureKind): boolean;
   dispose(): void;
+}
+
+interface Template {
+  root: THREE.Object3D;
+  size: THREE.Vector3;
+}
+
+function weaveNormal() {
+  const n = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = n;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(n, n);
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const a = Math.sin((x / n) * Math.PI * 16);
+      const b = Math.sin((y / n) * Math.PI * 16);
+      const over = (Math.floor(x / 4) + Math.floor(y / 4)) % 2 === 0;
+      const nx = over ? a * 0.5 : 0;
+      const ny = over ? 0 : b * 0.5;
+      const i = (y * n + x) * 4;
+      img.data[i] = 128 + nx * 120;
+      img.data[i + 1] = 128 + ny * 120;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = 255;
+    }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(6, 6);
+  return t;
+}
+
+function grainMap() {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#e6e6e6';
+  g.fillRect(0, 0, 256, 256);
+  let seed = 9;
+  const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 90; i++) {
+    const y = r() * 256;
+    const l = 175 + Math.floor(r() * 70);
+    g.strokeStyle = `rgba(${l},${l},${l},0.55)`;
+    g.lineWidth = 1 + r() * 3;
+    g.beginPath();
+    g.moveTo(0, y);
+    for (let x = 0; x <= 256; x += 16) g.lineTo(x, y + Math.sin(x * 0.03 + i) * 3);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
 }
 
 export function createFurnitureKit(): FurnitureKit {
   const geos = new Map<string, THREE.BufferGeometry>();
   const mats = new Map<string, THREE.MeshStandardMaterial>();
+  const templates = new Map<FurnitureKind, Template>();
+  const modelDisposables: { dispose(): void }[] = [];
+  let loading: Promise<void> | null = null;
+  let disposed = false;
+  const weave = weaveNormal();
+  const grain = grainMap();
 
   const rbox = (w: number, h: number, d: number, r = 0.03) => {
     const rr = Math.min(r, w / 2 - 0.001, h / 2 - 0.001, d / 2 - 0.001);
@@ -53,6 +121,32 @@ export function createFurnitureKit(): FurnitureKit {
     }
     return m;
   };
+  const fabric = (color: string | number, sheen = true) => {
+    const c = new THREE.Color(color as THREE.ColorRepresentation);
+    const key = `f${c.getHexString()}|${sheen}`;
+    let m = mats.get(key);
+    if (!m) {
+      const p = new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.92, normalMap: weave, normalScale: new THREE.Vector2(0.35, 0.35) });
+      if (sheen) {
+        p.sheen = 1;
+        p.sheenRoughness = 0.75;
+        p.sheenColor = c.clone().lerp(new THREE.Color('#ffffff'), 0.35);
+      }
+      m = p;
+      mats.set(key, m);
+    }
+    return m;
+  };
+  const wood = (color: string | number, rough = 0.55) => {
+    const c = new THREE.Color(color as THREE.ColorRepresentation);
+    const key = `w${c.getHexString()}|${rough}`;
+    let m = mats.get(key);
+    if (!m) {
+      m = new THREE.MeshStandardMaterial({ color: c, roughness: rough, map: grain });
+      mats.set(key, m);
+    }
+    return m;
+  };
 
   const shade = (hex: string, k: number) => {
     const c = new THREE.Color(hex);
@@ -81,8 +175,8 @@ export function createFurnitureKit(): FurnitureKit {
 
   function sofa(g: THREE.Group, p: Piece, arms = true) {
     const { w, d, h } = p;
-    const body = mat(p.color, 0.9);
-    const cush = mat(shade(p.color, 1.12), 0.92);
+    const body = fabric(p.color);
+    const cush = fabric(shade(p.color, 1.12));
     const leg = mat(DARK, 0.5, 0.3);
     const legH = 0.1;
     const seatH = h * 0.38;
@@ -100,16 +194,17 @@ export function createFurnitureKit(): FurnitureKit {
 
   function bed(g: THREE.Group, p: Piece) {
     const { w, d, h } = p;
-    const frame = mat(shade(WOOD, 0.85), 0.7);
-    const sheet = mat(WHITE, 0.95);
-    const cover = mat(p.color, 0.95);
-    const pillow = mat('#f6f3ee', 0.95);
+    const frame = wood(shade(WOOD, 0.85), 0.6);
+    const sheet = fabric(WHITE);
+    const cover = fabric(p.color);
+    const pillow = fabric('#f6f3ee');
     const baseH = 0.22;
     add(g, rbox(w, baseH, d, 0.03), frame, 0, baseH / 2 + 0.06, 0);
     add(g, rbox(w - 0.06, 0.2, d - 0.1, 0.07), sheet, 0, baseH + 0.16, 0.03);
     add(g, rbox(w - 0.04, 0.05, d * 0.62, 0.025), cover, 0, baseH + 0.275, d * 0.17);
     add(g, rbox(w - 0.04, 0.2, 0.05, 0.02), cover, 0, baseH + 0.18, d * 0.48).scale.y = 1;
-    add(g, rbox(w + 0.06, h * 1.15, 0.08, 0.03), mat(p.color, 0.8), 0, (h * 1.15) / 2, -d / 2 - 0.04);
+    add(g, rbox(w + 0.06, h * 1.15, 0.1, 0.04), fabric(shade(p.color, 0.9)), 0, (h * 1.15) / 2, -d / 2 - 0.04);
+    add(g, rbox(w - 0.02, 0.06, d * 0.26, 0.03), fabric(shade(p.color, 0.75)), 0, baseH + 0.31, d * 0.33);
     const n = w > 1.0 ? 2 : 1;
     for (let i = 0; i < n; i++) add(g, rbox(Math.min(0.62, (w - 0.2) / n - 0.06), 0.13, 0.36, 0.06), pillow, -((n - 1) * (w / n)) / 2 + i * (w / n), baseH + 0.34, -d / 2 + 0.28);
     legs4(g, w, d, 0.06, 0.04, mat(DARK, 0.5, 0.3));
@@ -117,8 +212,8 @@ export function createFurnitureKit(): FurnitureKit {
 
   function table(g: THREE.Group, p: Piece, topT = 0.04) {
     const { w, d, h } = p;
-    const top = mat(p.color, 0.55);
-    const leg = mat(shade(p.color, 0.7), 0.6);
+    const top = wood(p.color, 0.5);
+    const leg = wood(shade(p.color, 0.7), 0.6);
     add(g, rbox(w, topT, d, 0.015), top, 0, h - topT / 2, 0);
     legs4(g, w, d, h - topT, 0.06, leg, 0.025);
   }
@@ -149,8 +244,8 @@ export function createFurnitureKit(): FurnitureKit {
 
   function wardrobe(g: THREE.Group, p: Piece) {
     const { w, d, h } = p;
-    const body = mat(p.color, 0.6);
-    const door = mat(shade(p.color, 1.08), 0.55);
+    const body = wood(p.color, 0.6);
+    const door = wood(shade(p.color, 1.08), 0.5);
     const handle = mat('#c9b27a', 0.3, 0.8);
     add(g, rbox(w, h, d, 0.02), body, 0, h / 2, 0);
     const n = Math.max(2, Math.round(w / 0.5));
@@ -177,8 +272,8 @@ export function createFurnitureKit(): FurnitureKit {
 
   function rug(g: THREE.Group, p: Piece) {
     const { w, d } = p;
-    add(g, rbox(w, 0.018, d, 0.008), mat(p.color, 1), 0, 0.011, 0).castShadow = false;
-    const inner = add(g, rbox(w * 0.82, 0.02, d * 0.82, 0.008), mat(shade(p.color, 0.84), 1), 0, 0.012, 0);
+    add(g, rbox(w, 0.018, d, 0.008), fabric(p.color, false), 0, 0.011, 0).castShadow = false;
+    const inner = add(g, rbox(w * 0.82, 0.02, d * 0.82, 0.008), fabric(shade(p.color, 0.84), false), 0, 0.012, 0);
     inner.castShadow = false;
   }
 
@@ -240,7 +335,7 @@ export function createFurnitureKit(): FurnitureKit {
 
   function crib(g: THREE.Group, p: Piece) {
     const { w, d, h } = p;
-    const m = mat(p.color, 0.6);
+    const m = wood(p.color, 0.6);
     add(g, rbox(w, 0.04, d, 0.01), m, 0, 0.3, 0);
     add(g, rbox(w - 0.08, 0.1, d - 0.08, 0.04), mat('#f4efe8', 0.95), 0, 0.37, 0);
     const bars = Math.round(d / 0.1);
@@ -254,7 +349,7 @@ export function createFurnitureKit(): FurnitureKit {
 
   function beanBag(g: THREE.Group, p: Piece) {
     const { w, d, h } = p;
-    const b = add(g, ball(0.5, 2), mat(p.color, 1), 0, h * 0.5, 0);
+    const b = add(g, ball(0.5, 3), fabric(p.color), 0, h * 0.5, 0);
     b.scale.set(w, h, d);
     b.scale.multiplyScalar(1);
   }
@@ -312,10 +407,66 @@ export function createFurnitureKit(): FurnitureKit {
     'shoe-rack': shoeRack,
   };
 
+  const fromModel = (g: THREE.Group, piece: Piece, t: Template) => {
+    const { w, d, h } = piece;
+    let ax = w / t.size.x;
+    let ay = h / t.size.y;
+    let az = d / t.size.z;
+    const u = Math.cbrt(ax * ay * az);
+    const lim = (v: number) => Math.min(u * 1.3, Math.max(u / 1.3, v));
+    ax = Math.min(lim(ax), w / t.size.x);
+    az = Math.min(lim(az), d / t.size.z);
+    ay = lim(ay);
+    const inst = t.root.clone(true);
+    inst.scale.set(ax, ay, az);
+    g.add(inst);
+    if (piece.kind === 'tv-unit') {
+      const tvW = Math.min(1.5, w * 0.78);
+      add(g, rbox(tvW, tvW * 0.56, 0.035, 0.012), mat('#111114', 0.25, 0.4), 0, h + tvW * 0.28 + 0.14, -d * 0.1);
+      add(g, rbox(0.3, 0.12, 0.1, 0.01), mat('#111114', 0.4), 0, h + 0.06, -d * 0.1);
+    }
+    g.userData.model = true;
+  };
+
+  const loadOne = (loader: GLTFLoader, kind: FurnitureKind) =>
+    loader.loadAsync(modelUrl(kind)).then(
+      (gltf) => {
+        const root = gltf.scene;
+        root.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh) return;
+          m.castShadow = true;
+          m.receiveShadow = true;
+          modelDisposables.push(m.geometry);
+          const list = Array.isArray(m.material) ? m.material : [m.material];
+          for (const mm of list) {
+            modelDisposables.push(mm);
+            const sm = mm as THREE.MeshStandardMaterial;
+            for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap'] as const) {
+              const tx = sm[k];
+              if (tx) {
+                tx.anisotropy = 4;
+                modelDisposables.push(tx);
+              }
+            }
+          }
+        });
+        if (disposed) {
+          modelDisposables.forEach((x) => x.dispose());
+          return;
+        }
+        const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
+        if (size.x > 0.01 && size.y > 0.01 && size.z > 0.01) templates.set(kind, { root, size });
+      },
+      () => undefined,
+    );
+
   return {
     build(piece, glow = false) {
       const g = new THREE.Group();
-      (builders[piece.kind] ?? ((gg, p) => add(gg, rbox(p.w, p.h, p.d), mat(p.color), 0, p.h / 2, 0)))(g, piece);
+      const t = templates.get(piece.kind);
+      if (t) fromModel(g, piece, t);
+      else (builders[piece.kind] ?? ((gg, p) => add(gg, rbox(p.w, p.h, p.d), mat(p.color), 0, p.h / 2, 0)))(g, piece);
       if (glow) {
         const box = new THREE.Mesh(
           new THREE.BoxGeometry(piece.w + 0.08, piece.h + 0.08, piece.d + 0.08),
@@ -327,9 +478,25 @@ export function createFurnitureKit(): FurnitureKit {
       }
       return g;
     },
+    load() {
+      if (!loading) {
+        const loader = new GLTFLoader();
+        loading = Promise.all(MODEL_KINDS.map((k) => loadOne(loader, k))).then(() => undefined);
+      }
+      return loading;
+    },
+    hasModel(kind) {
+      return templates.has(kind);
+    },
     dispose() {
+      disposed = true;
       for (const g of geos.values()) g.dispose();
       for (const m of mats.values()) m.dispose();
+      modelDisposables.forEach((x) => x.dispose());
+      modelDisposables.length = 0;
+      templates.clear();
+      weave.dispose();
+      grain.dispose();
       geos.clear();
       mats.clear();
     },

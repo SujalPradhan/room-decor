@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Download, Printer } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { ASSUMPTIONS, MASS_TARGET_G } from './spec';
 import { STATUS_WORD, referenceMassG, tally, type Approval } from './engine';
 import type { BracketId, CheckResult, Status, Verification } from './model';
@@ -24,8 +24,9 @@ export function summaryLine(verification: Verification) {
   return `${n.pass} pass · ${n.fail} fail · ${n.test} need test · ${n.deviation} deviation${n.deviation === 1 ? '' : 's'}`;
 }
 
-function ReportTable({ title, checks }: { title: string; checks: CheckResult[] }) {
+function ReportTable({ title, checks, focus }: { title: string; checks: CheckResult[]; focus: Props['focus'] }) {
   const [open, setOpen] = useState<string[]>([]);
+  useEffect(() => { if (focus) setOpen(checks.filter(check => check.status === focus.status).map(check => check.id)); }, [focus]);
   const toggle = (id: string) => setOpen(list => list.includes(id) ? list.filter(each => each !== id) : [...list, id]);
   return <div className="bracket-report-block">
     <h3>{title}</h3>
@@ -73,6 +74,7 @@ interface Props {
   onClearApproval: () => void;
   onStl: (bracket: BracketId) => void;
   onMarkdown: () => void;
+  focus?: { status: Status; n: number } | null;
 }
 
 function ApprovalPanel({ verification, approval, canDecide, onDecide, onClearApproval }: Pick<Props, 'verification' | 'approval' | 'canDecide' | 'onDecide' | 'onClearApproval'>) {
@@ -101,15 +103,23 @@ function ApprovalPanel({ verification, approval, canDecide, onDecide, onClearApp
   </section>;
 }
 
-export default function BracketReport({ verification, label, approval, canDecide, onDecide, onClearApproval, onStl, onMarkdown }: Props) {
+export default function BracketReport({ verification, label, approval, canDecide, onDecide, onClearApproval, onStl, onMarkdown, focus = null }: Props) {
   const n = tally(verification);
+  useEffect(() => {
+    if (!focus) return;
+    const frame = requestAnimationFrame(() => {
+      const target = document.querySelector(`.bracket-row.is-${focus.status}`) ?? document.getElementById('bracket-report');
+      target?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focus]);
   const chips: { status: Status; count: number; text: string }[] = [
     { status: 'pass', count: n.pass, text: 'PASS' },
     { status: 'fail', count: n.fail, text: 'FAIL' },
     { status: 'test', count: n.test, text: 'NEEDS TEST' },
     { status: 'deviation', count: n.deviation, text: 'DEVIATION' },
   ];
-  return <section className="bracket-report" aria-label="Verification report">
+  return <section className="bracket-report" id="bracket-report" aria-label="Verification report">
     <div className="bracket-report-head">
       <div>
         <h2>Verification report</h2>
@@ -130,7 +140,7 @@ export default function BracketReport({ verification, label, approval, canDecide
     <p className="bracket-query"><strong>Query to the client.</strong> The CTS steel reference part weighs about {Math.round(referenceMassG())} g at this riser size, against the {MASS_TARGET_G} g target. Please confirm the target or the riser size.</p>
     {SECTIONS.map(section => {
       const checks = verification.checks.filter(check => sectionOf(check) === section.key);
-      return checks.length ? <ReportTable key={section.key} title={section.title} checks={checks} /> : null;
+      return checks.length ? <ReportTable key={section.key} title={section.title} checks={checks} focus={focus} /> : null;
     })}
     <div className="bracket-report-block">
       <h3>Deliverables against CTS section 5</h3>

@@ -1,12 +1,13 @@
-import { BedDouble, Box, Building2, ChevronDown, FlaskConical, Loader2, RotateCcw, Sparkles, Square, Store, Undo2, Wrench } from 'lucide-react';
+import { BedDouble, Box, Building2, ChevronDown, Download, FlaskConical, Loader2, RotateCcw, Sparkles, Square, Store, Undo2, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import BracketIterations from './BracketIterations';
 import BracketReport from './BracketReport';
+import BracketVariants from './BracketVariants';
 import { runBracketAgent, type Iteration } from './bracket-agent';
 import { createBracketScene } from './bracket-scene';
-import { clampDesign, reportMarkdown, verify, type Approval } from './engine';
+import { clampDesign, reportMarkdown, sameDesign, tally, variants, verify, type Approval, type Variant } from './engine';
 import { exportStl } from './mesh';
-import type { BracketDesign, BracketId } from './model';
+import type { BracketDesign, BracketId, Status } from './model';
 import { ASSUMPTIONS, CTS, MASS_TARGET_G, MATERIALS, MIN_FREQ_HZ, KICK_N, STARTING } from './spec';
 import './bracket.css';
 import '../lab/lab.css';
@@ -72,6 +73,8 @@ export default function BracketPage() {
   const iterationCount = useRef(0);
   const container = useRef<HTMLDivElement>(null);
   const scene = useRef<ReturnType<typeof createBracketScene> | null>(null);
+  const [focus, setFocus] = useState<{ status: Status; n: number } | null>(null);
+  const presets = useMemo(() => variants(), []);
 
   const shownIteration = active !== null ? iterations[active] : null;
   const shownDesign = shownIteration ? shownIteration.design : design;
@@ -150,6 +153,11 @@ export default function BracketPage() {
     if (!previous) return;
     stop(); setDesign(previous); setUndo(list => list.slice(0, -1)); setIterations([]); setReply(null); setMorph({ key: `undo-${Date.now()}`, ms: 800 });
   };
+  const pickVariant = (variant: Variant) => {
+    if (sameDesign(variant.verification.design, design) && active === null) return;
+    stop(); setUndo(list => [...list, design]); setDesign(variant.verification.design); setIterations([]); setReply(null); setError(null);
+    setMorph({ key: `variant-${variant.id}-${Date.now()}`, ms: 1400 });
+  };
   const pickIteration = (index: number) => { setActive(index); setMorph({ key: `pick-${iterations[index].n}-${Date.now()}`, ms: 900 }); };
 
   const decide = (decision: Approval['decision'], by: string, note: string) =>
@@ -166,6 +174,12 @@ export default function BracketPage() {
     { label: 'Foot-kick capacity', value: `${fmt(d.kickCapacityN)} N`, note: `at least ${fmt(KICK_N)} N`, bad: d.kickCapacityN < KICK_N },
     { label: 'Prototype cost', value: `$${d.unitCostUSD.toFixed(2)}`, note: 'each, printed', bad: false },
   ];
+
+  const counts = tally(verification);
+  const chips: { status: Status; text: string }[] = [
+    { status: 'pass', text: 'PASS' }, { status: 'fail', text: 'FAIL' }, { status: 'test', text: 'NEEDS TEST' }, { status: 'deviation', text: 'DEVIATION' },
+  ];
+  const shownVariant = presets.find(v => sameDesign(v.verification.design, shownDesign));
 
   const reportLabel = shownIteration ? `Showing try ${shownIteration.n}` : iterations.length ? 'Showing the final design' : undo.length ? 'Showing the current design' : 'Showing the starting design';
 
@@ -186,6 +200,23 @@ export default function BracketPage() {
       </div>
     </header>
     <p className="lab-intro">An automotive client sent a component spec ({CTS.id}) for a seat riser bracket pair and wants it 3D-printable. The design agent designs it, checks every clause and hands over a verification report for approval.</p>
+    <section className="bracket-top" aria-label="Verification summary and downloads">
+      <div className="bracket-top-summary">
+        <h2>Verification <span>{shownIteration ? `try ${shownIteration.n}` : shownVariant ? shownVariant.name : 'current design'} · {material.short}, {fmt(d.massG)} g</span></h2>
+        <ul className="bracket-summary bracket-top-chips">
+          {chips.map(chip => <li key={chip.status} className={`is-${chip.status}`}>
+            <button type="button" onClick={() => setFocus({ status: chip.status, n: Date.now() })} aria-label={`${counts[chip.status]} ${chip.text}, show in the report`}><b>{counts[chip.status]}</b> {chip.text}</button>
+          </li>)}
+        </ul>
+        <p className="lab-note">Click a count to open those clauses in the report below.</p>
+      </div>
+      <div className="bracket-top-downloads" role="group" aria-label="Downloads">
+        <button type="button" className="lab-primary" onClick={() => stl('rh')}><Download size={14} aria-hidden /> STL RH</button>
+        <button type="button" className="lab-primary" onClick={() => stl('lh')}><Download size={14} aria-hidden /> STL LH</button>
+        <button type="button" className="lab-ghost" onClick={markdown}><Download size={14} aria-hidden /> Report (.md)</button>
+      </div>
+    </section>
+    <BracketVariants variants={presets} current={shownDesign} disabled={busy} onPick={pickVariant} />
     <main className="lab-main">
       <div className="lab-left">
         <div className="lab-toolbar" role="toolbar" aria-label="View">
@@ -235,7 +266,7 @@ export default function BracketPage() {
         {reply && !busy && <section className="bracket-reply" aria-label="Agent reply"><h3>Agent reply</h3><p>{reply}</p>{limits && <p className="lab-note">{limits}</p>}{iterations.length > 0 && <p className="lab-note">Click a try above to see that version in 3D.</p>}</section>}
         {!busy && iterations.length > 0 && active !== null && <button type="button" className="lab-ghost" onClick={() => { setActive(null); setMorph({ key: `final-${Date.now()}`, ms: 900 }); }}><ChevronDown size={14} aria-hidden /> Back to the final design</button>}
       </aside>
-      <BracketReport verification={verification} label={reportLabel} approval={shownIteration ? null : approval} canDecide={!shownIteration && !busy} onDecide={decide} onClearApproval={clearApproval} onStl={stl} onMarkdown={markdown} />
+      <BracketReport verification={verification} label={reportLabel} approval={shownIteration ? null : approval} canDecide={!shownIteration && !busy} onDecide={decide} onClearApproval={clearApproval} onStl={stl} onMarkdown={markdown} focus={focus} />
     </main>
   </div>;
 }

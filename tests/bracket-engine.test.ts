@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AVG_HEIGHT_MM, clampDesign, derive, optimise, referenceMassG, reportMarkdown, tally, verify } from '../src/bracket/engine';
+import { AVG_HEIGHT_MM, BALANCED_MARGIN, VARIANT_DESIGNS, clampDesign, derive, margins, optimise, referenceMassG, reportMarkdown, sameDesign, searchVariants, tally, variants, verify, weakest } from '../src/bracket/engine';
 import type { BracketDesign, Status, Verification } from '../src/bracket/model';
 import { REQUIREMENTS, STARTING } from '../src/bracket/spec';
 
@@ -144,5 +144,43 @@ describe('optimiser, starting design, report', () => {
     expect(md).toContain('APPROVED by Client');
     expect(md).not.toContain('—');
     expect(reportMarkdown(verify(GOOD), { date: 'x', iterations: 1 })).toContain('Awaiting client review.');
+  });
+});
+
+describe('pre-built variations', () => {
+  it('match a full search of the design space', () => {
+    expect(searchVariants()).toEqual(VARIANT_DESIGNS);
+  }, 30000);
+
+  it('all clear every check, under the mass target, and trade mass for margin', () => {
+    const [lightest, balanced, robust] = variants();
+    expect([lightest.id, balanced.id, robust.id]).toEqual(['lightest', 'balanced', 'robust']);
+    for (const v of variants()) {
+      expect(v.verification.passed).toBe(true);
+      expect(v.verification.derived.massG).toBeLessThanOrEqual(680);
+    }
+    expect(lightest.verification.derived.massG).toBeLessThan(balanced.verification.derived.massG);
+    expect(balanced.verification.derived.massG).toBeLessThan(robust.verification.derived.massG);
+    expect(lightest.weakest.ratio).toBeLessThan(BALANCED_MARGIN);
+    expect(balanced.weakest.ratio).toBeGreaterThanOrEqual(BALANCED_MARGIN);
+    expect(robust.weakest.ratio).toBeGreaterThan(balanced.weakest.ratio);
+    expect(lightest.verification.design).toEqual(optimise()!.design);
+  });
+
+  it('lightest really is on the edge: a thinner wall fails', () => {
+    expect(verify({ ...VARIANT_DESIGNS.lightest, thickness: 1.25 }).passed).toBe(false);
+  });
+
+  it('margins are capacity over demand and the weakest is the minimum', () => {
+    const d = derive(GOOD);
+    const list = margins(GOOD, d);
+    expect(list.find(m => m.id === 'LC-04')!.ratio).toBeCloseTo(d.kickCapacityN / 3500, 9);
+    expect(weakest(list).ratio).toBe(Math.min(...list.map(m => m.ratio)));
+  });
+
+  it('sameDesign compares every field', () => {
+    expect(sameDesign(VARIANT_DESIGNS.balanced, { ...VARIANT_DESIGNS.balanced })).toBe(true);
+    expect(sameDesign(VARIANT_DESIGNS.balanced, { ...VARIANT_DESIGNS.balanced, bossHeight: 5 })).toBe(false);
+    expect(sameDesign(VARIANT_DESIGNS.balanced, { ...VARIANT_DESIGNS.balanced, finish: 'as-printed' })).toBe(false);
   });
 });

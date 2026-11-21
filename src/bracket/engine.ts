@@ -355,3 +355,72 @@ export function reportMarkdown(v: Verification, meta: { date: string; iterations
   );
   return out.join('\n');
 }
+
+export interface Margin { id: string; label: string; ratio: number }
+
+export function margins(design: BracketDesign, d: Derived = derive(design)): Margin[] {
+  const f = flags(design, d);
+  const mat = MATERIALS[design.material];
+  return [
+    { id: 'LC-01', label: 'Lip bending (LC-01)', ratio: d.lipCapacityNmm / d.lipMomentNmm },
+    { id: 'LC-01-BEARING', label: 'Bolt hole bearing (LC-01)', ratio: (1.5 * mat.yieldMPa) / f.bearingMPa },
+    { id: 'LC-01-PUNCH', label: 'Washer punch-through (LC-01)', ratio: (0.6 * mat.yieldMPa) / f.punchMPa },
+    { id: 'LC-03', label: 'Seat slam (LC-03)', ratio: d.slamElasticN / SLAM_N },
+    { id: 'LC-04', label: 'Foot kick (LC-04)', ratio: d.kickCapacityN / KICK_N },
+    { id: 'NVH', label: 'First mode (NVH)', ratio: d.frequencyHz / MIN_FREQ_HZ },
+    { id: 'JOINING', label: 'Nut push-out (joining)', ratio: d.pushOutN / PUSH_OUT_N },
+  ];
+}
+
+export const weakest = (list: Margin[]): Margin => list.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+
+export type VariantId = 'lightest' | 'balanced' | 'robust';
+export interface Variant { id: VariantId; name: string; why: string; verification: Verification; weakest: Margin }
+
+export const BALANCED_MARGIN = 1.5;
+
+const VARIANT_TEXT: Record<VariantId, { name: string; why: string }> = {
+  lightest: { name: 'Lightest', why: 'Every gram counts against the mass target. Thinnest wall and the largest cut-outs that still clear every check.' },
+  balanced: { name: 'Balanced', why: `The lightest design with at least ${BALANCED_MARGIN}× margin on every load check, so a physical test that comes in below the hand calculation does not force a redesign.` },
+  robust: { name: 'Most margin', why: 'The most headroom on its weakest check within the mass target. For a first physical build where a retest costs more than the extra grams.' },
+};
+
+export function searchVariants(): Record<VariantId, BracketDesign | null> {
+  type Cand = { design: BracketDesign; d: Derived; min: number };
+  let lightest: Cand | null = null, balanced: Cand | null = null, robust: Cand | null = null;
+  const lighter = (a: Cand, b: Cand | null) => !b || a.d.massG < b.d.massG - 1e-9 || (Math.abs(a.d.massG - b.d.massG) <= 1e-9 && a.d.unitCostUSD < b.d.unitCostUSD);
+  for (const material of MATERIAL_IDS) {
+    for (const bossHeight of range(minBossHeight(material), BOUNDS.bossHeight[1], 1)) for (const orientation of ORIENTATIONS) for (const finish of FINISHES)
+      for (const thickness of range(1, 5, 0.25)) for (const topWidth of range(25, 70, 5)) for (const lipWidth of range(20, 45, 1)) for (const cutout of range(0, 0.6, 0.1)) {
+        const design: BracketDesign = { material, orientation, finish, thickness, topWidth, lipWidth, cutout, bossHeight };
+        const d = derive(design);
+        if (d.massG > MASS_TARGET_G) continue;
+        if (!noFail(flags(design, d))) continue;
+        const pick: Cand = { design, d, min: weakest(margins(design, d)).ratio };
+        if (lighter(pick, lightest)) lightest = pick;
+        if (pick.min >= BALANCED_MARGIN && lighter(pick, balanced)) balanced = pick;
+        if (!robust || pick.min > robust.min + 1e-9 || (Math.abs(pick.min - robust.min) <= 1e-9 && lighter(pick, robust))) robust = pick;
+      }
+  }
+  return { lightest: lightest?.design ?? null, balanced: balanced?.design ?? null, robust: robust?.design ?? null };
+}
+
+const TI: Pick<BracketDesign, 'material' | 'orientation' | 'finish'> = { material: 'ti64-lpbf', orientation: 'upright', finish: 'machined' };
+export const VARIANT_DESIGNS: Record<VariantId, BracketDesign> = {
+  lightest: { ...TI, thickness: 1.5, topWidth: 25, lipWidth: 26, cutout: 0.5, bossHeight: 3 },
+  balanced: { ...TI, thickness: 2, topWidth: 25, lipWidth: 26, cutout: 0.6, bossHeight: 4 },
+  robust: { ...TI, thickness: 3.25, topWidth: 25, lipWidth: 26, cutout: 0.6, bossHeight: 9 },
+};
+
+let variantCache: Variant[] | null = null;
+
+export function variants(): Variant[] {
+  variantCache ??= (Object.keys(VARIANT_DESIGNS) as VariantId[]).map(id => {
+    const design = VARIANT_DESIGNS[id];
+    return { id, ...VARIANT_TEXT[id], verification: verify(design), weakest: weakest(margins(design)) };
+  });
+  return variantCache;
+}
+
+export const sameDesign = (a: BracketDesign, b: BracketDesign): boolean =>
+  (Object.keys(a) as (keyof BracketDesign)[]).every(k => typeof a[k] === 'number' ? Math.abs((a[k] as number) - (b[k] as number)) < 1e-6 : a[k] === b[k]);
